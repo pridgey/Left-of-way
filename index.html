@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Road Drafter</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <strong class="brand">Road Drafter</strong>
+  <form id="search">
+    <input id="q" type="search" placeholder="Address, &quot;Main St &amp; 5th Ave, City&quot;, or paste a Google Maps link" autocomplete="off">
+    <button type="submit">Go</button>
+    <ul id="results" hidden></ul>
+  </form>
+  <div class="group" title="Design options: sketch alternatives for the same place">
+    <select id="variant"></select>
+    <button id="varNew" title="New empty option">New</button>
+    <button id="varDup" title="Copy this option">Copy</button>
+    <button id="varRename" title="Rename this option">Rename</button>
+    <button id="varDel" title="Delete this option">Delete</button>
+  </div>
+  <div class="group">
+    <button id="openFile" title="Open a saved project file">Open</button>
+    <button id="saveFile" title="Save the project to a file (Ctrl+S)">Save</button>
+  </div>
+  <label class="units">Units
+    <select id="units"><option value="ft">feet</option><option value="m">meters</option></select>
+  </label>
+  <input type="file" id="bdFile" accept="image/*" hidden>
+  <input type="file" id="projFile" accept=".json,application/json" hidden>
+</header>
+
+<main>
+  <nav id="tools" aria-label="Tools"></nav>
+
+  <div id="stage">
+    <div id="map"></div>
+    <svg id="overlay" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+      <defs><clipPath id="swipeClip"><rect id="swipeRect" x="0" y="0" width="0" height="10000"/></clipPath></defs>
+      <g id="bd"></g><g id="els"></g><g id="draft"></g><g id="sel"></g>
+    </svg>
+    <div id="hint"></div>
+    <div id="toast" hidden></div>
+  </div>
+
+  <aside id="panel">
+    <section id="props"></section>
+
+    <section>
+      <h2>View</h2>
+      <label class="check"><input type="checkbox" id="showProposal" checked> Show proposal <kbd>H</kbd></label>
+      <label>Proposal opacity<input type="range" id="proposalOpacity" min="0.1" max="1" step="0.05" value="1"></label>
+      <label class="check"><input type="checkbox" id="compare"> Before / after slider</label>
+    </section>
+
+    <section>
+      <h2>Imagery</h2>
+      <div id="imgSec"></div>
+    </section>
+
+    <section>
+      <h2>Quantities &amp; cost</h2>
+      <div id="qtySec"></div>
+    </section>
+
+    <section>
+      <h2>Export to Figma</h2>
+      <p class="muted small">Exports exactly what's in view. Each element becomes its own named layer.</p>
+      <label class="check"><input type="checkbox" id="exportAerial"> Include aerial photo</label>
+      <label>Image sharpness
+        <select id="res"><option value="1">1× (smaller file)</option><option value="2" selected>2× (sharper)</option></select>
+      </label>
+      <div class="row">
+        <button id="copy">Copy SVG</button>
+        <button id="download">Download SVG</button>
+      </div>
+      <p id="status" class="muted small"></p>
+    </section>
+
+    <section class="muted small">
+      <h2>Shortcuts</h2>
+      Click to place · drag to move · drag the blue dot to rotate (Shift snaps 15°) · orange squares aim roundabout legs<br>
+      Roads, patches and paths: click points, double-click or <kbd>Enter</kbd> to finish, <kbd>Backspace</kbd> removes the last point.
+      Drag the small dots to add points; <kbd>Alt</kbd>+click a point to delete it.<br>
+      <kbd>[</kbd> <kbd>]</kbd> rotate · <kbd>Ctrl+D</kbd> duplicate · <kbd>Del</kbd> delete · <kbd>Ctrl+Z</kbd> undo · <kbd>Ctrl+S</kbd> save · <kbd>Esc</kbd> cancel
+    </section>
+  </aside>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
