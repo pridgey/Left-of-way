@@ -76,6 +76,7 @@ function lineSvg(pts, color, width, dash) {
 const segment = {
   kind: 'path', label: 'Road segment', group: 'Streets', key: 's', minPts: 2,
   hint: 'Click along the street centerline; double-click or Enter to finish. Start or end on an orange dot to connect.',
+  help: 'Drag an end onto an orange dot to connect it. Drag the small dots to add bends. The arrow shows which way is "forward" for the lane list.',
   params: [
     { k: 'smooth', label: 'Smooth curves', type: 'bool', def: true },
     { k: 'xwStart', label: 'Crosswalk at start', type: 'bool', def: false },
@@ -233,28 +234,58 @@ const segment = {
 };
 
 /** Cross-section diagram of a road segment at fraction t (0 = start, 1 = end). */
+const SHORT = {
+  sidewalk: 'Sidewalk', planting: 'Planting', parking: 'Parking', bike: 'Bike', buffer: 'Buffer', posts: 'Posts',
+  separator: 'Curb', travel: 'Travel', turn: 'Turn', center: 'Center turn', bus: 'Bus', median: 'Median',
+};
+
+// Place labels on up to two rows so neighbors never overlap.
+function staggered(items, rowYs, charW) {
+  const rightEdge = rowYs.map(() => -Infinity);
+  return items.map(({ cx, text }) => {
+    const half = (text.length * charW) / 2 + 3;
+    let row = rightEdge.findIndex((r) => cx - half >= r);
+    if (row < 0) row = rightEdge.indexOf(Math.min(...rightEdge));
+    rightEdge[row] = cx + half;
+    return { cx, text, y: rowYs[row] };
+  });
+}
+
 export function crossSectionSvg(lanes, t, f, { pxPerM = 22, title = '' } = {}) {
-  const { ws } = laneLayout(lanes, t);
+  const { ws, road } = laneLayout(lanes, t);
   const shown = lanes.map((l, i) => ({ l, w: ws[i] })).filter((x) => x.w > 0.05);
   const total = shown.reduce((sum, x) => sum + x.w, 0);
-  const W = Math.max(200, total * pxPerM + 20), H = 150;
-  let x = 10, out = '';
+  const W = Math.max(200, total * pxPerM + 20);
+  const font = 'font-family="Inter, sans-serif"';
+  const top = title ? 18 : 0;
+  let x = 10, bars = '';
+  const names = [], widths = [];
   for (const { l, w } of shown) {
     const T = LANE_TYPES[l.type];
     const bw = w * pxPerM;
     const raised = T.off || T.raised;
-    const y = raised ? 50 : 56;
-    out += `<rect x="${n(x)}" y="${y}" width="${n(bw)}" height="${raised ? 20 : 14}" fill="${T.fill}" stroke="#222" stroke-width="0.5"/>`;
-    const arrow = l.dir === 'fwd' ? ' ↑' : l.dir === 'back' ? ' ↓' : '';
-    out += `<text x="${n(x + bw / 2)}" y="${y - 6}" font-size="10" text-anchor="end" fill="#ddd" font-family="Inter, sans-serif"
-      transform="rotate(-50 ${n(x + bw / 2)} ${y - 6})">${T.label}${arrow}</text>`;
-    out += `<text x="${n(x + bw / 2)}" y="90" font-size="10" text-anchor="middle" fill="#ddd" font-family="Inter, sans-serif">${f(w)}</text>`;
+    const y = top + (raised ? 38 : 44);
+    bars += `<rect x="${n(x)}" y="${y}" width="${n(bw)}" height="${raised ? 20 : 14}" fill="${T.fill}" stroke="#111" stroke-width="0.5"/>`;
+    if (l.dir) {
+      const cx = x + bw / 2, cy = top + 51, d = l.dir === 'fwd' ? -1 : 1;
+      bars += `<path d="M ${n(cx - 3)} ${n(cy - d * 2)} L ${n(cx)} ${n(cy + d * 3)} L ${n(cx + 3)} ${n(cy - d * 2)}" fill="none" stroke="#fff" stroke-width="1.3"/>`;
+    }
+    names.push({ cx: x + bw / 2, text: SHORT[l.type] || T.label });
+    widths.push({ cx: x + bw / 2, text: f(w) });
     x += bw;
   }
-  out += `<line x1="10" y1="100" x2="${n(x)}" y2="100" stroke="#999"/>
-    <text x="${n((10 + x) / 2)}" y="116" font-size="11" text-anchor="middle" fill="#fff" font-family="Inter, sans-serif">${f(total)} total, ${f(laneLayout(lanes, t).road)} curb to curb</text>`;
-  if (title) out += `<text x="10" y="140" font-size="11" fill="#aaa" font-family="Inter, sans-serif">${title}</text>`;
-  return { svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${n(W)}" height="${H}" viewBox="0 0 ${n(W)} ${H}"><rect width="100%" height="100%" fill="#26292d"/>${out}</svg>`, width: W, height: H };
+  let out = bars;
+  for (const lb of staggered(names, [top + 32, top + 18], 5.6)) {
+    out += `<text x="${n(lb.cx)}" y="${lb.y}" font-size="10" text-anchor="middle" fill="#ddd" ${font}>${lb.text}</text>`;
+  }
+  for (const lb of staggered(widths, [top + 72, top + 85], 5.4)) {
+    out += `<text x="${n(lb.cx)}" y="${lb.y}" font-size="10" text-anchor="middle" fill="#bbb" ${font}>${lb.text}</text>`;
+  }
+  out += `<line x1="10" y1="${top + 93}" x2="${n(x)}" y2="${top + 93}" stroke="#777"/>
+    <text x="${n((10 + x) / 2)}" y="${top + 108}" font-size="11" text-anchor="middle" fill="#fff" ${font}>${f(total)} total · ${f(road)} curb to curb</text>`;
+  if (title) out += `<text x="10" y="13" font-size="11" font-weight="600" fill="#aaa" ${font}>${title}</text>`;
+  const H = top + 118;
+  return { svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${n(W)}" height="${H}" viewBox="0 0 ${n(W)} ${H}"><rect width="100%" height="100%" rx="4" fill="#1f2226"/>${out}</svg>`, width: W, height: H };
 }
 
 // ---------- patch (repave / remove markings) ----------
@@ -269,6 +300,7 @@ const MATERIALS = {
 const patch = {
   kind: 'path', label: 'Patch / remove', group: 'Streets', key: 'p', minPts: 3, closed: true,
   hint: 'Click around an area to cover it, e.g. paint out old turn lanes. Double-click or Enter to finish.',
+  help: 'Covers whatever is underneath, such as old turn lanes or markings. Drag the small dots to add corners.',
   params: [
     { k: 'material', label: 'Material', type: 'select', def: 'asphalt', options: Object.entries(MATERIALS).map(([k, v]) => [k, v.label]) },
     { k: 'curb', label: 'Curb outline', type: 'bool', def: false },
@@ -293,6 +325,7 @@ const patch = {
 const dimension = {
   kind: 'path', label: 'Measure', group: 'Analysis', key: 'd', minPts: 2, maxPts: 2,
   hint: 'Click two points to measure. It exports as a labeled dimension line.',
+  help: 'Drag either end to re-measure. It exports as a labeled dimension line.',
   params: [{ k: 'size', label: 'Label size (px)', type: 'num', def: 13, min: 8, max: 32 }],
   name: (el, f) => `Dimension ${f(dimLength(el))}`,
   draw(el, ctx) {
@@ -337,6 +370,7 @@ const tightSpots = new WeakMap();
 const vehicle = {
   kind: 'path', label: 'Turning check', group: 'Analysis', key: 't', minPts: 2,
   hint: 'Click the path the front axle follows through the turn. The orange area is the space the vehicle sweeps.',
+  help: 'The orange area is the space the vehicle sweeps. Red dots mark turns tighter than it can make. Drag points to adjust the path.',
   params: [
     { k: 'vehicle', label: 'Vehicle', type: 'select', def: 'fire', options: Object.entries(VEHICLES).map(([k, v]) => [k, v.label]) },
   ],

@@ -5,6 +5,8 @@ import { n } from '../geo.js';
 import { COLORS as C, zebra, zebraArea, bumpPath, hitRect, curbStroke } from './common.js';
 
 const PI = Math.PI;
+// Defaults are round US numbers (feet), stored in meters.
+const F = (ft) => ft / 3.28084;
 
 // ---------- roundabouts (shared by full and mini) ----------
 
@@ -92,21 +94,21 @@ function legsQty(p, R) {
 
 const crosswalkParams = (offset) => [
   { k: 'xwOffset', label: 'Crosswalk distance from circle', type: 'len', def: offset, min: 2, max: 15 },
-  { k: 'xwWidth', label: 'Crosswalk width', type: 'len', def: 3.05, min: 1.8, max: 6 },
+  { k: 'xwWidth', label: 'Crosswalk width', type: 'len', def: F(10), min: 1.8, max: 6 },
 ];
 
 const roundabout = {
   kind: 'point', label: 'Roundabout', group: 'Intersections', key: 'r', legs: true,
   hint: 'Drag the orange squares to aim each leg down its street. Draw roads from the leg ends.',
   params: [
-    { k: 'icd', label: 'Outer diameter', type: 'len', def: 40, min: 25, max: 75 },
-    { k: 'circ', label: 'Circulating lane width', type: 'len', def: 6, min: 4, max: 12 },
-    { k: 'apron', label: 'Truck apron width', type: 'len', def: 3.5, min: 0, max: 6 },
-    { k: 'splitLen', label: 'Splitter island length', type: 'len', def: 18, min: 0, max: 40 },
-    { k: 'splitW', label: 'Splitter island width', type: 'len', def: 3.5, min: 1, max: 6 },
-    ...crosswalkParams(6),
+    { k: 'icd', label: 'Outer diameter', type: 'len', def: F(130), min: 25, max: 75 },
+    { k: 'circ', label: 'Circulating lane width', type: 'len', def: F(20), min: 4, max: 12 },
+    { k: 'apron', label: 'Truck apron width', type: 'len', def: F(12), min: 0, max: 6 },
+    { k: 'splitLen', label: 'Splitter island length', type: 'len', def: F(60), min: 0, max: 40 },
+    { k: 'splitW', label: 'Splitter island width', type: 'len', def: F(12), min: 1, max: 6 },
+    ...crosswalkParams(F(20)),
   ],
-  defaults: () => ({ legs: makeLegs(4, 11) }),
+  defaults: () => ({ legs: makeLegs(4, F(36)) }),
   bbox: (p) => { const r = legLength(p); return [-r, -r, r, r]; },
   ports: legPorts,
   name: (p, f) => `Roundabout ${f(p.icd)}`,
@@ -141,13 +143,13 @@ const mini = {
   kind: 'point', label: 'Mini-roundabout', group: 'Intersections', key: 'm', legs: true,
   hint: 'Drag the orange squares to aim each leg down its street.',
   params: [
-    { k: 'icd', label: 'Outer diameter', type: 'len', def: 22, min: 13, max: 30 },
-    { k: 'island', label: 'Center island diameter', type: 'len', def: 7, min: 2, max: 14 },
-    { k: 'splitLen', label: 'Painted island length', type: 'len', def: 8, min: 0, max: 20 },
-    { k: 'splitW', label: 'Painted island width', type: 'len', def: 1.6, min: 0.5, max: 4 },
-    ...crosswalkParams(5),
+    { k: 'icd', label: 'Outer diameter', type: 'len', def: F(70), min: 13, max: 30 },
+    { k: 'island', label: 'Center island diameter', type: 'len', def: F(24), min: 2, max: 14 },
+    { k: 'splitLen', label: 'Painted island length', type: 'len', def: F(25), min: 0, max: 20 },
+    { k: 'splitW', label: 'Painted island width', type: 'len', def: F(5), min: 0.5, max: 4 },
+    ...crosswalkParams(F(16)),
   ],
-  defaults: () => ({ legs: makeLegs(4, 9) }),
+  defaults: () => ({ legs: makeLegs(4, F(30)) }),
   bbox: (p) => { const r = legLength(p); return [-r, -r, r, r]; },
   ports: legPorts,
   name: (p, f) => `Mini-roundabout ${f(p.icd)}`,
@@ -177,11 +179,11 @@ const raised = {
   kind: 'point', label: 'Raised intersection', group: 'Intersections', key: null,
   hint: 'Size it to the intersection, curb to curb. Roads can snap to its four sides.',
   params: [
-    { k: 'width', label: 'Width (east-west)', type: 'len', def: 14, min: 6, max: 40 },
-    { k: 'height', label: 'Depth (north-south)', type: 'len', def: 14, min: 6, max: 40 },
-    { k: 'ramp', label: 'Ramp length', type: 'len', def: 1.8, min: 0.6, max: 4 },
+    { k: 'width', label: 'Width (east-west)', type: 'len', def: F(45), min: 6, max: 40 },
+    { k: 'height', label: 'Depth (north-south)', type: 'len', def: F(45), min: 6, max: 40 },
+    { k: 'ramp', label: 'Ramp length', type: 'len', def: F(6), min: 0.6, max: 4 },
     { k: 'crosswalks', label: 'Crosswalks on all sides', type: 'bool', def: true },
-    { k: 'xwWidth', label: 'Crosswalk width', type: 'len', def: 3.05, min: 1.8, max: 6 },
+    { k: 'xwWidth', label: 'Crosswalk width', type: 'len', def: F(10), min: 1.8, max: 6 },
   ],
   bbox: (p) => [-p.width / 2 - p.ramp, -p.height / 2 - p.ramp, p.width / 2 + p.ramp, p.height / 2 + p.ramp],
   ports: (p) => [
@@ -215,10 +217,10 @@ const diverter = {
   kind: 'point', label: 'Diagonal diverter', group: 'Intersections', key: null,
   hint: 'Size it to the intersection. Rotate 90° to flip the diagonal. The gap lets bikes through.',
   params: [
-    { k: 'size', label: 'Intersection size', type: 'len', def: 12, min: 6, max: 30 },
-    { k: 'width', label: 'Island width', type: 'len', def: 2.2, min: 1, max: 5 },
+    { k: 'size', label: 'Intersection size', type: 'len', def: F(40), min: 6, max: 30 },
+    { k: 'width', label: 'Island width', type: 'len', def: F(7), min: 1, max: 5 },
     { k: 'bikeGap', label: 'Gap for bikes', type: 'bool', def: true },
-    { k: 'gap', label: 'Gap width', type: 'len', def: 1.8, min: 1.2, max: 3 },
+    { k: 'gap', label: 'Gap width', type: 'len', def: F(6), min: 1.2, max: 3 },
     { k: 'planted', label: 'Planted', type: 'bool', def: true },
   ],
   bbox: (p) => [-p.size / 2, -p.size / 2, p.size / 2, p.size / 2],
@@ -245,13 +247,13 @@ const bumpout = {
   kind: 'point', label: 'Bumpout', group: 'Traffic calming', key: 'b',
   hint: 'The straight edge is the curb; the bump points into the street. Turn on the crosswalk to cross from it.',
   params: [
-    { k: 'length', label: 'Length along curb', type: 'len', def: 12, min: 3, max: 40 },
-    { k: 'depth', label: 'Depth into street', type: 'len', def: 2.4, min: 1, max: 5 },
-    { k: 'taper', label: 'End taper', type: 'len', def: 2.5, min: 0.5, max: 8 },
+    { k: 'length', label: 'Length along curb', type: 'len', def: F(40), min: 3, max: 40 },
+    { k: 'depth', label: 'Depth into street', type: 'len', def: F(8), min: 1, max: 5 },
+    { k: 'taper', label: 'End taper', type: 'len', def: F(8), min: 0.5, max: 8 },
     { k: 'planter', label: 'Planting strip', type: 'bool', def: true },
     { k: 'crosswalk', label: 'Crosswalk from bumpout', type: 'bool', def: false },
-    { k: 'xwLen', label: 'Street width to cross', type: 'len', def: 10, min: 3, max: 30 },
-    { k: 'xwWidth', label: 'Crosswalk width', type: 'len', def: 3.05, min: 1.8, max: 6 },
+    { k: 'xwLen', label: 'Street width to cross', type: 'len', def: F(30), min: 3, max: 30 },
+    { k: 'xwWidth', label: 'Crosswalk width', type: 'len', def: F(10), min: 1.8, max: 6 },
     { k: 'xwShift', label: 'Crosswalk position along curb', type: 'len', def: 0, min: -15, max: 15 },
   ],
   bbox: (p) => [Math.min(-p.length / 2, p.crosswalk ? p.xwShift - p.xwWidth / 2 : 0), 0,
@@ -288,11 +290,11 @@ const chicane = {
   kind: 'point', label: 'Chicane', group: 'Traffic calming', key: null,
   hint: 'Two offset bumpouts that make drivers weave. Rotate so the road runs left-right.',
   params: [
-    { k: 'roadWidth', label: 'Curb-to-curb width', type: 'len', def: 9, min: 5, max: 20 },
-    { k: 'length', label: 'Each bump length', type: 'len', def: 10, min: 4, max: 25 },
-    { k: 'depth', label: 'Bump depth', type: 'len', def: 2.4, min: 1, max: 5 },
-    { k: 'taper', label: 'Bump taper', type: 'len', def: 3, min: 0.5, max: 8 },
-    { k: 'spacing', label: 'Offset between bumps', type: 'len', def: 15, min: 4, max: 40 },
+    { k: 'roadWidth', label: 'Curb-to-curb width', type: 'len', def: F(30), min: 5, max: 20 },
+    { k: 'length', label: 'Each bump length', type: 'len', def: F(30), min: 4, max: 25 },
+    { k: 'depth', label: 'Bump depth', type: 'len', def: F(8), min: 1, max: 5 },
+    { k: 'taper', label: 'Bump taper', type: 'len', def: F(10), min: 0.5, max: 8 },
+    { k: 'spacing', label: 'Offset between bumps', type: 'len', def: F(50), min: 4, max: 40 },
     { k: 'planter', label: 'Planted', type: 'bool', def: true },
   ],
   bbox: (p) => [-p.spacing / 2 - p.length / 2, -p.roadWidth / 2, p.spacing / 2 + p.length / 2, p.roadWidth / 2],
@@ -319,10 +321,10 @@ const hump = {
   hint: 'Width runs across the street. Cushions leave gaps for fire truck wheels.',
   params: [
     { k: 'kind', label: 'Type', type: 'select', def: 'hump', options: [['hump', 'Speed hump'], ['table', 'Speed table'], ['cushion', 'Speed cushions']] },
-    { k: 'roadWidth', label: 'Width across street', type: 'len', def: 9, min: 3, max: 20 },
-    { k: 'depth', label: 'Length along street', type: 'len', def: 3.7, min: 2, max: 10 },
-    { k: 'padWidth', label: 'Cushion pad width', type: 'len', def: 1.9, min: 1.2, max: 3 },
-    { k: 'padGap', label: 'Gap between pads', type: 'len', def: 1.0, min: 0.5, max: 2 },
+    { k: 'roadWidth', label: 'Width across street', type: 'len', def: F(30), min: 3, max: 20 },
+    { k: 'depth', label: 'Length along street', type: 'len', def: F(12), min: 2, max: 10 },
+    { k: 'padWidth', label: 'Cushion pad width', type: 'len', def: F(6), min: 1.2, max: 3 },
+    { k: 'padGap', label: 'Gap between pads', type: 'len', def: F(3), min: 0.5, max: 2 },
   ],
   bbox: (p) => [-p.roadWidth / 2, -p.depth / 2, p.roadWidth / 2, p.depth / 2],
   name: (p, f) => `${{ hump: 'Speed hump', table: 'Speed table', cushion: 'Speed cushions' }[p.kind]} ${f(p.roadWidth)}`,
@@ -364,12 +366,12 @@ const refuge = {
   kind: 'point', label: 'Refuge island', group: 'Traffic calming', key: null,
   hint: 'A median island with a crosswalk through it. Line the long side up with traffic.',
   params: [
-    { k: 'roadWidth', label: 'Street width to cross', type: 'len', def: 14, min: 6, max: 30 },
-    { k: 'length', label: 'Island length', type: 'len', def: 10, min: 3, max: 40 },
-    { k: 'width', label: 'Island width', type: 'len', def: 2.4, min: 1, max: 6 },
+    { k: 'roadWidth', label: 'Street width to cross', type: 'len', def: F(45), min: 6, max: 30 },
+    { k: 'length', label: 'Island length', type: 'len', def: F(30), min: 3, max: 40 },
+    { k: 'width', label: 'Island width', type: 'len', def: F(8), min: 1, max: 6 },
     { k: 'planted', label: 'Planted', type: 'bool', def: true },
     { k: 'crosswalk', label: 'Crosswalk through island', type: 'bool', def: true },
-    { k: 'xwWidth', label: 'Crosswalk width', type: 'len', def: 3.05, min: 1.8, max: 6 },
+    { k: 'xwWidth', label: 'Crosswalk width', type: 'len', def: F(10), min: 1.8, max: 6 },
   ],
   bbox: (p) => (p.crosswalk
     ? [-Math.max(p.length, p.xwWidth) / 2, -p.roadWidth / 2, Math.max(p.length, p.xwWidth) / 2, p.roadWidth / 2]
@@ -398,8 +400,8 @@ const crosswalk = {
   kind: 'point', label: 'Crosswalk', group: 'Markings', key: 'c',
   hint: 'Length runs across the street. Rotate so the stripes run the same way as traffic.',
   params: [
-    { k: 'length', label: 'Crossing length', type: 'len', def: 12, min: 3, max: 40 },
-    { k: 'width', label: 'Crosswalk width', type: 'len', def: 3.05, min: 1.8, max: 6 },
+    { k: 'length', label: 'Crossing length', type: 'len', def: F(40), min: 3, max: 40 },
+    { k: 'width', label: 'Crosswalk width', type: 'len', def: F(10), min: 1.8, max: 6 },
     { k: 'raised', label: 'Raised crosswalk', type: 'bool', def: false },
   ],
   bbox: (p) => [-p.length / 2, -p.width / 2 - (p.raised ? 1.8 : 0), p.length / 2, p.width / 2 + (p.raised ? 1.8 : 0)],
@@ -425,7 +427,7 @@ const arrow = {
     { k: 'kind', label: 'Arrow', type: 'select', def: 'straight', options: [
       ['straight', 'Straight'], ['left', 'Left turn'], ['right', 'Right turn'],
       ['straightLeft', 'Straight + left'], ['straightRight', 'Straight + right']] },
-    { k: 'length', label: 'Length', type: 'len', def: 2.9, min: 1.5, max: 6 },
+    { k: 'length', label: 'Length', type: 'len', def: F(10), min: 1.5, max: 6 },
   ],
   bbox: (p) => [-p.length * 0.45, -p.length / 2, p.length * 0.45, p.length / 2],
   name: (p) => `Arrow ${p.kind}`,
@@ -454,7 +456,7 @@ const arrow = {
 const sharrow = {
   kind: 'point', label: 'Bike marking', group: 'Markings', key: null,
   hint: 'Shared-lane marking ("sharrow"). Chevrons point the direction of travel.',
-  params: [{ k: 'length', label: 'Length', type: 'len', def: 3.3, min: 1.5, max: 5 }],
+  params: [{ k: 'length', label: 'Length', type: 'len', def: F(10), min: 1.5, max: 5 }],
   bbox: (p) => [-0.6 * p.length / 3.3, -p.length / 2, 0.6 * p.length / 3.3, p.length / 2],
   name: () => 'Bike marking',
   svg(p, s) {
@@ -473,7 +475,7 @@ const sharrow = {
 
 const tree = {
   kind: 'point', label: 'Tree', group: 'Streetscape', key: null,
-  params: [{ k: 'diameter', label: 'Canopy diameter', type: 'len', def: 6, min: 2, max: 15 }],
+  params: [{ k: 'diameter', label: 'Canopy diameter', type: 'len', def: F(20), min: 2, max: 15 }],
   bbox: (p) => [-p.diameter / 2, -p.diameter / 2, p.diameter / 2, p.diameter / 2],
   name: (p, f) => `Tree ${f(p.diameter)}`,
   svg(p, s) {
@@ -489,8 +491,8 @@ const parklet = {
   kind: 'point', label: 'Parklet', group: 'Streetscape', key: null,
   hint: 'The straight edge is the curb; the deck sits in the parking lane.',
   params: [
-    { k: 'length', label: 'Length', type: 'len', def: 6, min: 2, max: 20 },
-    { k: 'depth', label: 'Depth', type: 'len', def: 2, min: 1, max: 3 },
+    { k: 'length', label: 'Length', type: 'len', def: F(20), min: 2, max: 20 },
+    { k: 'depth', label: 'Depth', type: 'len', def: F(6), min: 1, max: 3 },
   ],
   bbox: (p) => [-p.length / 2, 0, p.length / 2, p.depth],
   name: (p, f) => `Parklet ${f(p.length)}`,

@@ -16,11 +16,17 @@
     <ul id="results" hidden></ul>
   </form>
   <div class="group" title="Design options: sketch alternatives for the same place">
+    <label for="variant" class="muted small">Design</label>
     <select id="variant"></select>
-    <button id="varNew" title="New empty option">New</button>
-    <button id="varDup" title="Copy this option">Copy</button>
-    <button id="varRename" title="Rename this option">Rename</button>
-    <button id="varDel" title="Delete this option">Delete</button>
+    <details class="menu" id="varMenu">
+      <summary title="Design option actions" aria-label="Design option actions">⋯</summary>
+      <div class="menu-items">
+        <button id="varNew">New empty option</button>
+        <button id="varDup">Copy this option</button>
+        <button id="varRename">Rename…</button>
+        <button id="varDel" class="danger">Delete this option</button>
+      </div>
+    </details>
   </div>
   <div class="group">
     <button id="openFile" title="Open a saved project file">Open</button>
@@ -42,53 +48,67 @@
       <defs><clipPath id="swipeClip"><rect id="swipeRect" x="0" y="0" width="0" height="10000"/></clipPath></defs>
       <g id="bd"></g><g id="els"></g><g id="draft"></g><g id="sel"></g>
     </svg>
+    <div id="welcome" hidden>
+      <h1>Find a street to start</h1>
+      <p>Search for an address above, or paste a Google Maps link (the most reliable way).</p>
+      <p class="muted">Then pick a tool on the left and click the map. Everything you draw exports to Figma as named layers.</p>
+      <button id="welcomeSearch" class="primary">Search for a place</button>
+    </div>
     <div id="hint"></div>
-    <div id="toast" hidden></div>
+    <div id="toast" hidden><span id="toastMsg"></span><button id="toastUndo" hidden>Undo</button></div>
   </div>
 
   <aside id="panel">
     <section id="props"></section>
 
-    <section>
-      <h2>View</h2>
+    <details class="sec" data-sec="view" open>
+      <summary><h2>View</h2></summary>
       <label class="check"><input type="checkbox" id="showProposal" checked> Show proposal <kbd>H</kbd></label>
       <label>Proposal opacity<input type="range" id="proposalOpacity" min="0.1" max="1" step="0.05" value="1"></label>
       <label class="check"><input type="checkbox" id="compare"> Before / after slider</label>
-    </section>
+    </details>
 
-    <section>
-      <h2>Imagery</h2>
+    <details class="sec" data-sec="imagery" open>
+      <summary><h2>Imagery</h2></summary>
       <div id="imgSec"></div>
-    </section>
+    </details>
 
-    <section>
-      <h2>Quantities &amp; cost</h2>
+    <details class="sec" data-sec="qty" open>
+      <summary><h2>Quantities &amp; cost</h2></summary>
       <div id="qtySec"></div>
-    </section>
+    </details>
 
-    <section>
-      <h2>Export to Figma</h2>
+    <details class="sec" data-sec="export" open>
+      <summary><h2>Export to Figma</h2></summary>
       <p class="muted small">Exports exactly what's in view. Each element becomes its own named layer.</p>
       <label class="check"><input type="checkbox" id="exportAerial"> Include aerial photo</label>
       <label>Image sharpness
         <select id="res"><option value="1">1× (smaller file)</option><option value="2" selected>2× (sharper)</option></select>
       </label>
       <div class="row">
-        <button id="copy">Copy SVG</button>
+        <button id="copy" class="primary">Copy SVG</button>
         <button id="download">Download SVG</button>
       </div>
       <p id="status" class="muted small"></p>
-    </section>
+    </details>
 
-    <section class="muted small">
-      <h2>Shortcuts</h2>
+    <details class="sec muted small" data-sec="keys">
+      <summary><h2>Shortcuts</h2></summary>
       Click to place · drag to move · drag the blue dot to rotate (Shift snaps 15°) · orange squares aim roundabout legs<br>
       Roads, patches and paths: click points, double-click or <kbd>Enter</kbd> to finish, <kbd>Backspace</kbd> removes the last point.
       Drag the small dots to add points; <kbd>Alt</kbd>+click a point to delete it.<br>
       <kbd>[</kbd> <kbd>]</kbd> rotate · <kbd>Ctrl+D</kbd> duplicate · <kbd>Del</kbd> delete · <kbd>Ctrl+Z</kbd> undo · <kbd>Ctrl+S</kbd> save · <kbd>Esc</kbd> cancel
-    </section>
+    </details>
   </aside>
 </main>
+
+<dialog id="ask">
+  <form method="dialog">
+    <label id="askLabel" for="askInput"></label>
+    <input id="askInput" autocomplete="off">
+    <div class="row"><button value="ok" class="primary">OK</button><button value="cancel" formnovalidate>Cancel</button></div>
+  </form>
+</dialog>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script type="module" src="js/main.js"></script>

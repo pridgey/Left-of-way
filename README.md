@@ -54,7 +54,8 @@ busy, so they can be slow or fail. Pasting a Google Maps link is the most reliab
 
 ## Comparing and planning
 
-- **Design options:** keep several alternatives for the same place (New / Copy / Rename / Delete in the header).
+- **Design options:** keep several alternatives for the same place (the ⋯ menu next to Design in the header).
+- **Item list:** with nothing selected, the right panel lists everything in the current option. Click an entry to select it.
 - **Before / after slider** and proposal opacity in the View panel. Press H to hide the proposal.
 - **Quantities and cost:** rough areas of asphalt, concrete, landscaping and paint, with editable
   placeholder unit prices.

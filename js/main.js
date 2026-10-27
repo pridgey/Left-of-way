@@ -8,12 +8,19 @@ import { setupSearch } from './search.js';
 
 const STORE_KEY = 'road-drafter-v2';
 const OLD_STORE_KEY = 'road-drafter-v1';
-const SNAP_PX = 16;
+const SNAP_PX = 22;
 const SQFT = 10.7639;
 const $ = (id) => document.getElementById(id);
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
 const esc = (s) => String(s).replace(/[&"<>]/g, (c) => ({ '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' }[c]));
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const icon = (body) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+const ACT_ICONS = {
+  dup: icon('<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>'),
+  front: icon('<rect x="8" y="8" width="12" height="12" rx="1" fill="currentColor" fill-opacity=".35"/><path d="M4 16V4h12"/>'),
+  back: icon('<rect x="4" y="4" width="12" height="12" rx="1" fill="currentColor" fill-opacity=".35"/><path d="M20 8v12H8"/>'),
+  del: icon('<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>'),
+};
 
 // ---------- project state ----------
 // Placeholder unit prices, stored per m² (trees per tree). Users edit them in the panel.
@@ -60,7 +67,7 @@ const getEl = (id) => els().find((e) => e.id === id);
 const ui = {
   tool: 'select', selectedId: null, draft: null, cursor: null, drag: null,
   hidden: false, opacity: 1, compare: false, swipe: 0.5,
-  adjustBackdrop: false, calibrate: null, lastLanes: null,
+  adjustBackdrop: false, calibrate: null, lastLanes: null, cursorPx: null,
 };
 const undoStack = [];
 const linkDirs = new Map(); // element id -> {start, end} forced road directions at connected ends
@@ -83,6 +90,7 @@ function checkpoint() {
   if (undoStack.length > 100) undoStack.shift();
 }
 function undo() {
+  $('toast').hidden = true;
   if (!undoStack.length) return;
   project.variants[project.current].elements = JSON.parse(undoStack.pop());
   if (!getEl(ui.selectedId)) ui.selectedId = null;
@@ -252,6 +260,12 @@ function portsMarkup() {
   if (!showing) return '';
   const skip = ui.drag?.el?.id;
   let out = '';
+  // ring the dot the next click (or drop) would connect to
+  const near = ui.drag?.mode === 'vertex' ? ui.drag.port : ui.cursorPx && nearestPort(ui.cursorPx, null);
+  if (near) {
+    const [x, y] = toPx(near.ll[0], near.ll[1]);
+    out += `<circle class="port" cx="${n(x)}" cy="${n(y)}" r="13" fill="none" stroke="#fff" stroke-width="2.5"/>`;
+  }
   for (const el of els()) {
     if (el.id === skip) continue;
     for (const p of portsOf(el)) {
@@ -262,9 +276,19 @@ function portsMarkup() {
   return out;
 }
 
+// Translucent preview of a click-to-place element under the cursor.
+const ghostParams = {};
+function ghostMarkup() {
+  const t = TYPES[ui.tool];
+  if (!t || t.kind !== 'point' || !ui.cursor || ui.calibrate) return '';
+  ghostParams[ui.tool] = ghostParams[ui.tool] || newParams(ui.tool);
+  const temp = { id: 'ghost', type: ui.tool, lat: ui.cursor[0], lng: ui.cursor[1], rot: 0, p: ghostParams[ui.tool] };
+  return `<g opacity="0.55">${markup(temp, { interactive: false })}</g>`;
+}
+
 function draftMarkup() {
   const d = ui.draft;
-  if (!d) return '';
+  if (!d) return ghostMarkup();
   const t = TYPES[d.type];
   const pts = ui.cursor ? [...d.pts, ui.cursor] : d.pts;
   let out = '';
@@ -315,6 +339,7 @@ let qtyTimer = null;
 function refresh() {
   render();
   renderProps();
+  updateWelcome();
   clearTimeout(qtyTimer);
   qtyTimer = setTimeout(renderQuantities, 150);
   save();
@@ -322,19 +347,39 @@ function refresh() {
 
 map.on('move', render);
 map.on('zoomstart', () => overlay.classList.add('hidden'));
-map.on('zoomend', () => { overlay.classList.remove('hidden'); render(); save(); });
+map.on('zoomend', () => { overlay.classList.remove('hidden'); render(); save(); updateWelcome(); updateHint(); });
+function updateWelcome() {
+  $('welcome').hidden = map.getZoom() >= 14 || project.variants.some((v) => v.elements.length) || !!project.backdrop;
+}
 map.on('moveend', save);
 window.addEventListener('resize', render);
 
 // ---------- toasts / hints ----------
 const hint = $('hint');
 let toastTimer = null;
-function toast(msg) {
+function toast(msg, { undoable = false } = {}) {
   const t = $('toast');
-  t.textContent = msg;
+  $('toastMsg').textContent = msg;
+  $('toastUndo').hidden = !undoable;
   t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, 4500);
+  toastTimer = setTimeout(() => { t.hidden = true; }, undoable ? 7000 : 4500);
+}
+$('toastUndo').onclick = () => undo();
+
+// A small in-page replacement for prompt(). Resolves to the text, or null if cancelled.
+function ask(label, value = '', type = 'text') {
+  const dlg = $('ask'), input = $('askInput');
+  $('askLabel').textContent = label;
+  input.type = type;
+  input.step = 'any';
+  input.value = value;
+  dlg.returnValue = '';
+  dlg.showModal();
+  input.select();
+  return new Promise((resolve) => {
+    dlg.addEventListener('close', () => resolve(dlg.returnValue === 'ok' ? input.value : null), { once: true });
+  });
 }
 function updateHint() {
   if (ui.calibrate) {
@@ -345,18 +390,19 @@ function updateHint() {
     hint.textContent = '';
   } else {
     const t = TYPES[ui.tool];
-    hint.textContent = t.hint && t.kind === 'path' ? t.hint : `Click the map to place a ${t.label.toLowerCase()}`;
-    if (map.getZoom() < 17) hint.textContent += ' (zoom in closer for accurate placement)';
+    hint.textContent = t.hint && t.kind === 'path' ? t.hint : `Click the map to place a ${t.label.toLowerCase()}.`;
+    hint.textContent += ' Esc cancels.';
+    if (map.getZoom() < 17) hint.textContent += ' Zoom in closer for accurate placement.';
   }
 }
 
 // ---------- tools ----------
 function buildToolbar() {
-  let html = `<button data-tool="select" title="Select / move (V)">${ICONS.select}<span>Select</span></button>`;
+  let html = `<button data-tool="select" title="Select / move (V)">${ICONS.select}<span>Select</span><kbd class="key">V</kbd></button>`;
   for (const g of GROUPS) {
     const items = Object.entries(TYPES).filter(([, t]) => t.group === g);
     html += `<div class="tool-group">${g}</div>`;
-    html += items.map(([k, t]) => `<button data-tool="${k}" title="${t.label}${t.key ? ` (${t.key.toUpperCase()})` : ''}">${ICONS[k] || ''}<span>${t.label}</span></button>`).join('');
+    html += items.map(([k, t]) => `<button data-tool="${k}" title="${t.label}${t.key ? ` (${t.key.toUpperCase()})` : ''}">${ICONS[k] || ''}<span>${t.label}</span>${t.key ? `<kbd class="key">${t.key.toUpperCase()}</kbd>` : ''}</button>`).join('');
   }
   $('tools').innerHTML = html;
   // blur so a later Enter (finish drawing) doesn't re-press the button
@@ -373,6 +419,7 @@ function setTool(name) {
   const drawing = name !== 'select' && TYPES[name].kind === 'path';
   if (drawing) map.doubleClickZoom.disable(); else map.doubleClickZoom.enable();
   if (name !== 'select') ui.selectedId = null;
+  if (name === 'select') { ui.cursor = null; ui.cursorPx = null; }
   updateHint();
   render();
   renderProps();
@@ -441,11 +488,17 @@ map.on('click', (e) => {
 });
 map.on('dblclick', () => { if (ui.draft) finishDraft(); });
 map.on('mousemove', (e) => {
-  if (!ui.draft) return;
+  if (ui.tool === 'select' && !ui.draft) return;
+  ui.cursorPx = [e.containerPoint.x, e.containerPoint.y];
   ui.cursor = [e.latlng.lat, e.latlng.lng];
+  // preview the road snapping to the dot it would connect to
+  if (ui.tool === 'segment') {
+    const port = nearestPort(ui.cursorPx, null);
+    if (port) ui.cursor = [port.ll[0], port.ll[1]];
+  }
   render();
 });
-map.on('mouseout', () => { if (ui.draft) { ui.cursor = null; render(); } });
+map.on('mouseout', () => { ui.cursor = null; ui.cursorPx = null; render(); });
 
 // ---------- dragging ----------
 const localPoint = (e) => { const r = overlay.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
@@ -539,6 +592,7 @@ window.addEventListener('pointermove', (e) => {
       const end = d.i === 0 ? 'start' : 'end';
       const port = nearestPort(p, d.el.id);
       d.el.p.links = d.el.p.links || {};
+      d.port = port;
       if (port) { ll = port.ll; d.el.p.links[end] = { id: port.id, key: port.key }; } else delete d.el.p.links[end];
     }
     d.el.pts[d.i] = [ll[0], ll[1]];
@@ -608,22 +662,25 @@ function lanesHtml(el) {
     return `<div class="lanerow" data-lane="${i}">
       <div class="lanetop">
         <span class="swatch" style="background:${T.fill}"></span>
-        <select data-lf="type">${Object.entries(LANE_TYPES).map(([k, t]) => `<option value="${k}" ${k === lane.type ? 'selected' : ''}>${t.label}</option>`).join('')}</select>
-        ${T.dir ? `<select data-lf="dir" title="Direction of travel"><option value="fwd" ${lane.dir === 'fwd' ? 'selected' : ''}>↑ with arrow</option>
-          <option value="back" ${lane.dir === 'back' ? 'selected' : ''}>↓ against</option></select>` : ''}
-        <button data-lact="up" title="Move left">↑</button><button data-lact="down" title="Move right">↓</button><button data-lact="del" title="Remove">×</button>
+        <select data-lf="type" aria-label="Lane type">${Object.entries(LANE_TYPES).map(([k, t]) => `<option value="${k}" ${k === lane.type ? 'selected' : ''}>${t.label}</option>`).join('')}</select>
+        ${T.dir ? `<button class="dir" data-lact="dir" title="Direction of travel, relative to the blue arrow on the road. Click to flip.">${lane.dir === 'back' ? '↓ Toward' : '↑ Away'}</button>` : ''}
+        <span class="gap"></span>
+        <button data-lact="up" title="Move left" ${i === 0 ? 'disabled' : ''}>▲</button><button data-lact="down" title="Move right" ${i === el.p.lanes.length - 1 ? 'disabled' : ''}>▼</button><button data-lact="del" title="Remove lane">×</button>
       </div>
-      <div class="lanew">Width <input type="number" data-lf="w" step="${step}" min="0" value="${toDisp(lane.w)}"> ${unit}
-        → end <input type="number" data-lf="w2" step="${step}" min="0" placeholder="same" value="${lane.w2 === null ? '' : toDisp(lane.w2)}"></div>
+      <div class="lanew"><span>Width</span><input type="number" data-lf="w" step="${step}" min="0" value="${toDisp(lane.w)}" aria-label="Width"> ${unit}
+        <span class="sep">·</span><span title="Leave blank to keep the same width. Set it to taper the lane along the road.">Tapers to</span>
+        <input type="number" data-lf="w2" step="${step}" min="0" placeholder="–" value="${lane.w2 === null ? '' : toDisp(lane.w2)}" aria-label="Width at the end of the road"> ${unit}</div>
     </div>`;
   }).join('');
   return `<h3>Lanes <span class="muted small">left to right, facing the arrow</span></h3>
     <select data-preset><option value="">Apply a preset…</option>${Object.keys(PRESETS).map((k) => `<option>${esc(k)}</option>`).join('')}</select>
     ${rows}
     <div class="row"><button data-addlane>+ Add lane</button><button data-flip>Flip direction</button></div>
-    <p class="muted small">Set an end width to taper a lane, e.g. a turn lane from 10 to 0 ft, or a median from 0 to 10 ft.</p>
+    <p class="muted small">"Tapers to" sets a lane's width at the far end, e.g. a turn lane from 10 to 0 ft while a median grows from 0 to 10 ft.</p>
     <h3>Cross-section</h3><div id="xs"></div>
-    <div class="row"><button data-xsdl="0">Download start</button><button data-xsdl="1">Download end</button></div>`;
+    ${el.p.lanes.some((l) => l.w2 !== null && l.w2 !== l.w)
+      ? '<div class="row"><button data-xsdl="0">Download start (SVG)</button><button data-xsdl="1">Download end (SVG)</button></div>'
+      : '<div class="row"><button data-xsdl="0">Download cross-section (SVG)</button></div>'}`;
 }
 
 function renderCrossSection(el) {
@@ -632,8 +689,8 @@ function renderCrossSection(el) {
   const lanes = el.p.lanes;
   const total = (t) => lanes.reduce((sum, l) => sum + Math.max(0, l.w + ((l.w2 ?? l.w) - l.w) * t), 0);
   const tapers = lanes.some((l) => l.w2 !== null && l.w2 !== l.w);
-  const one = (t, title) => crossSectionSvg(lanes, t, fmt, { pxPerM: Math.min(22, 230 / Math.max(1, total(t))), title }).svg;
-  box.innerHTML = tapers ? one(0, 'Start') + one(1, 'End') : one(0, '');
+  const one = (t, title) => crossSectionSvg(lanes, t, fmt, { pxPerM: Math.min(22, 260 / Math.max(1, total(t))), title }).svg;
+  box.innerHTML = tapers ? one(0, 'Start of road') + one(1, 'End of road') : one(0, '');
 }
 
 function linksHtml(el) {
@@ -662,20 +719,35 @@ const warningsHtml = (el) => {
 function renderProps() {
   const el = getEl(ui.selectedId);
   if (!el) {
-    const count = els().length;
-    props.innerHTML = `<h2>Properties</h2><p class="muted">Pick a tool on the left and click the map, or click something you've drawn to edit it.</p>
-      ${count ? `<button id="clear" class="danger">Clear this option (${count})</button>` : ''}`;
+    const list = els();
+    const name = project.variants[project.current].name;
+    props.innerHTML = list.length
+      ? `<h2>${esc(name)} · ${list.length} item${list.length === 1 ? '' : 's'}</h2>
+        <p class="muted small props-help">Click something on the map or in this list to edit it.</p>
+        <ul class="ellist">${list.map((e, i) => ({ e, i })).reverse().map(({ e }) => `<li><button data-pick="${e.id}">${ICONS[e.type] || ''}<span>${esc(nameOf(e))}</span></button></li>`).join('')}</ul>
+        <button id="clear" class="danger">Clear all</button>`
+      : `<h2>Properties</h2><p class="muted">Pick a tool on the left and click the map. Click anything you've drawn to edit it.</p>`;
+    props.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', () => {
+      ui.selectedId = b.dataset.pick;
+      render(); renderProps();
+    }));
     const clear = $('clear');
     if (clear) clear.onclick = () => {
-      if (!confirm('Remove everything in this design option?')) return;
       checkpoint();
       project.variants[project.current].elements = [];
       refresh();
+      toast(`Cleared ${name}.`, { undoable: true });
     };
     return;
   }
   const t = TYPES[el.type];
-  let h = `<h2>${t.label}</h2>${t.hint ? `<p class="muted small">${t.hint}</p>` : ''}`;
+  const help = t.help ?? (t.kind === 'point' ? t.hint : '');
+  let h = `<div class="props-head"><h2>${t.label}</h2>
+      <button data-act="dup" title="Duplicate (Ctrl+D)" aria-label="Duplicate">${ACT_ICONS.dup}</button>
+      <button data-act="front" title="Bring to front" aria-label="Bring to front">${ACT_ICONS.front}</button>
+      <button data-act="back" title="Send to back" aria-label="Send to back">${ACT_ICONS.back}</button>
+      <button data-act="del" class="danger" title="Delete (Del)" aria-label="Delete">${ACT_ICONS.del}</button></div>
+    ${help ? `<p class="muted small props-help">${help}</p>` : ''}`;
   if (t.kind === 'point') {
     h += `<label>Rotation (°)<span class="field">
       <input type="range" data-k="rot" min="0" max="359" step="1" value="${Math.round(el.rot)}">
@@ -686,8 +758,7 @@ function renderProps() {
   if (t.lanes) h += lanesHtml(el);
   h += linksHtml(el);
   h += `<div id="warns">${warningsHtml(el)}</div>`;
-  h += `<div class="row"><button data-act="front">Bring to front</button><button data-act="back">Send to back</button></div>
-    <div class="row"><button data-act="dup">Duplicate</button><button data-act="del" class="danger">Delete</button></div>`;
+  h += '<div class="row"><button data-act="deselect">Done</button></div>';
   props.innerHTML = h;
   if (t.lanes) renderCrossSection(el);
   wireProps(el);
@@ -778,8 +849,7 @@ function wireProps(el) {
           refresh();
           return;
         }
-        if (f === 'dir') lane.dir = input.value;
-        else if (f === 'w2' && input.value.trim() === '') lane.w2 = null;
+        if (f === 'w2' && input.value.trim() === '') lane.w2 = null;
         else {
           const v = parseFloat(input.value);
           if (Number.isNaN(v)) return;
@@ -792,6 +862,7 @@ function wireProps(el) {
     row.querySelectorAll('[data-lact]').forEach((b) => b.addEventListener('click', () => {
       checkpoint();
       const a = b.dataset.lact, L = el.p.lanes;
+      if (a === 'dir') lane.dir = lane.dir === 'back' ? 'fwd' : 'back';
       if (a === 'del') L.splice(i, 1);
       if (a === 'up' && i > 0) [L[i - 1], L[i]] = [L[i], L[i - 1]];
       if (a === 'down' && i < L.length - 1) [L[i + 1], L[i]] = [L[i], L[i + 1]];
@@ -835,6 +906,7 @@ function wireProps(el) {
     const a = b.dataset.act;
     if (a === 'dup') duplicate();
     if (a === 'del') removeSelected();
+    if (a === 'deselect') { ui.selectedId = null; render(); renderProps(); }
     if (a === 'front' || a === 'back') {
       checkpoint();
       const list = els(), i = list.indexOf(el);
@@ -868,7 +940,9 @@ function duplicate() {
 }
 
 function removeSelected() {
-  if (!getEl(ui.selectedId)) return;
+  const el = getEl(ui.selectedId);
+  if (!el) return;
+  toast(`Deleted ${TYPES[el.type].label.toLowerCase()}.`, { undoable: true });
   checkpoint();
   project.variants[project.current].elements = els().filter((e) => e.id !== ui.selectedId);
   ui.selectedId = null;
@@ -952,7 +1026,7 @@ function applyImagery() {
   renderImagery();
 }
 
-function calibrateClick(ll) {
+async function calibrateClick(ll) {
   const c = ui.calibrate;
   c.pts.push(ll);
   if (c.pts.length < 2) { updateHint(); return; }
@@ -963,7 +1037,7 @@ function calibrateClick(ll) {
   const [a, b] = c.pts;
   const [mx, my] = llToMeters(a[0], a[1], b[0], b[1]);
   const measured = Math.hypot(mx, my);
-  const answer = prompt(`How far apart are those two points in real life (${unitLabel()})?`);
+  const answer = await ask(`How far apart are those two points in real life (${unitLabel()})?`, '', 'number');
   const real = fromDisp(parseFloat(answer));
   if (!(real > 0) || !(measured > 0)) return;
   const bd = project.backdrop, ratio = real / measured;
@@ -1092,11 +1166,15 @@ function wireVariants() {
     project.variants.push(copy);
     switchVariant(project.variants.length - 1);
   };
-  $('varRename').onclick = () => {
+  $('varRename').onclick = async () => {
     const v = project.variants[project.current];
-    const name = prompt('Name this design option', v.name);
-    if (name) { v.name = name.trim(); renderVariants(); save(); }
+    const name = await ask('Name this design option', v.name);
+    if (name && name.trim()) { v.name = name.trim(); renderVariants(); refresh(); }
   };
+  // close the ⋯ menu after picking an item or clicking elsewhere
+  const menu = $('varMenu');
+  menu.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { menu.open = false; }));
+  document.addEventListener('pointerdown', (e) => { if (menu.open && !menu.contains(e.target)) menu.open = false; });
   $('varDel').onclick = () => {
     if (project.variants.length === 1) { toast('This is the only design option.'); return; }
     if (!confirm(`Delete "${project.variants[project.current].name}"?`)) return;
@@ -1238,6 +1316,19 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// ---------- collapsible panel sections (remembered per browser) ----------
+function wireSections() {
+  let open = {};
+  try { open = JSON.parse(localStorage.getItem('road-drafter-sections') || '{}'); } catch { /* storage unavailable */ }
+  document.querySelectorAll('details.sec').forEach((d) => {
+    if (d.dataset.sec in open) d.open = open[d.dataset.sec];
+    d.addEventListener('toggle', () => {
+      open[d.dataset.sec] = d.open;
+      try { localStorage.setItem('road-drafter-sections', JSON.stringify(open)); } catch { /* ignore */ }
+    });
+  });
+}
+
 // ---------- start ----------
 $('units').value = project.units;
 $('units').addEventListener('change', (e) => { project.units = e.target.value; refresh(); renderImagery(); });
@@ -1247,6 +1338,9 @@ $('copy').onclick = () => runExport('copy');
 $('download').onclick = () => runExport('download');
 setupSearch(map, $('search'), $('q'), $('results'));
 buildToolbar();
+wireSections();
+$('welcomeSearch').onclick = () => $('q').focus();
+updateWelcome();
 wireView();
 wireVariants();
 wireFiles();

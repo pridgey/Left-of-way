@@ -22,6 +22,13 @@ input:disabled { opacity: 0.5; }
 button { cursor: pointer; }
 button:hover { border-color: var(--accent); }
 button.on { border-color: var(--accent); background: #243447; }
+button.primary { background: #1f6fc4; border-color: #2f86e0; color: #fff; }
+button.primary:hover { background: #2a7fd8; }
+button:disabled { opacity: 0.45; cursor: default; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* spinner arrows crowd the small number boxes; typing and arrow keys still work */
+input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 
 header {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
@@ -30,6 +37,22 @@ header {
 .brand { white-space: nowrap; }
 .group { display: flex; gap: 4px; align-items: center; }
 .group button { padding: 5px 8px; font-size: 13px; }
+.group > label { white-space: nowrap; }
+.menu { position: relative; }
+.menu summary {
+  list-style: none; cursor: pointer; padding: 3px 10px; border: 1px solid var(--line); border-radius: 6px;
+  background: #33373c; font-size: 16px; line-height: 1.4; user-select: none;
+}
+.menu summary::-webkit-details-marker { display: none; }
+.menu summary:hover, .menu[open] summary { border-color: var(--accent); }
+.menu-items {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 2000; min-width: 190px;
+  display: flex; flex-direction: column; padding: 4px; gap: 2px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.4);
+}
+.menu-items button { text-align: left; border-color: transparent; background: none; }
+.menu-items button:hover { background: #33373c; }
+.menu-items button.danger { color: #ff8a80; }
 #search { position: relative; display: flex; gap: 6px; flex: 1; min-width: 260px; max-width: 520px; }
 #q { flex: 1; min-width: 0; }
 #results {
@@ -49,10 +72,15 @@ main { flex: 1; display: flex; min-height: 0; }
 }
 #tools .tool-group { grid-column: 1 / -1; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin: 8px 0 0; }
 #tools button {
-  display: flex; flex-direction: column; align-items: center; gap: 2px;
-  padding: 6px 2px; min-height: 58px;
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 6px 2px; min-height: 52px;
 }
-#tools button[data-tool="select"] { grid-column: 1 / -1; flex-direction: row; justify-content: center; min-height: 0; gap: 8px; }
+#tools button[data-tool="select"] { grid-column: 1 / -1; flex-direction: row; justify-content: center; min-height: 38px; gap: 8px; }
+#tools button[data-tool="select"] span { font-size: 13px; }
+#tools .key {
+  position: absolute; top: 2px; right: 3px; font-size: 9px; line-height: 1; padding: 2px 3px;
+  color: var(--muted); background: none; border: 0; opacity: .8;
+}
 #tools button span { font-size: 10.5px; color: var(--muted); text-align: center; line-height: 1.15; }
 #tools button.active { border-color: var(--accent); background: #243447; }
 #tools button.active span { color: var(--text); }
@@ -66,6 +94,13 @@ main { flex: 1; display: flex; min-height: 0; }
 #overlay .handle { pointer-events: all; cursor: grab; }
 #overlay .port { pointer-events: none; }
 #overlay.adjusting [data-bd] { pointer-events: all; cursor: move; }
+#welcome {
+  position: absolute; z-index: 600; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(420px, calc(100% - 32px)); padding: 20px 22px; border-radius: 10px;
+  background: rgba(30, 32, 36, .94); border: 1px solid var(--line); box-shadow: 0 10px 40px rgba(0,0,0,.5);
+}
+#welcome h1 { font-size: 18px; margin: 0 0 8px; }
+#welcome p { margin: 0 0 10px; }
 #hint, #toast {
   position: absolute; left: 50%; transform: translateX(-50%); z-index: 600;
   background: rgba(20, 22, 25, .9); padding: 6px 12px; border-radius: 6px; pointer-events: none;
@@ -73,11 +108,40 @@ main { flex: 1; display: flex; min-height: 0; }
 }
 #hint { bottom: 24px; }
 #hint:empty { display: none; }
-#toast { top: 16px; border: 1px solid var(--accent); }
+#toast { top: 16px; border: 1px solid var(--accent); display: flex; gap: 12px; align-items: center; pointer-events: auto; }
+#toast[hidden] { display: none; }
+#toast button { padding: 2px 10px; }
 
 #panel { width: 310px; overflow-y: auto; border-left: 1px solid var(--line); background: var(--panel); }
-#panel section { padding: 12px; border-bottom: 1px solid var(--line); }
+#panel section, #panel details.sec { padding: 12px; border-bottom: 1px solid var(--line); }
 #panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; margin: 0 0 8px; color: var(--muted); }
+#panel details.sec > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 6px; user-select: none; }
+#panel details.sec > summary::-webkit-details-marker { display: none; }
+#panel details.sec > summary::before {
+  content: ''; width: 6px; height: 6px; margin: 0 2px 8px 1px; flex: none;
+  border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg); transition: transform .15s;
+}
+#panel details.sec[open] > summary::before { transform: rotate(45deg); }
+#panel details.sec:not([open]) > summary h2 { margin-bottom: 0; }
+#panel details.sec:not([open]) > summary::before { margin-bottom: 0; }
+#panel details.sec > summary:hover h2 { color: var(--text); }
+.props-head { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
+.props-head h2 { flex: 1; margin: 0 !important; font-size: 15px !important; text-transform: none !important; letter-spacing: 0 !important; color: var(--text) !important; }
+.props-head button { padding: 3px 6px; line-height: 0; }
+.props-head button svg { width: 16px; height: 16px; }
+.props-help { margin: 0 0 12px; }
+.ellist { list-style: none; margin: 0 0 10px; padding: 0; max-height: 260px; overflow-y: auto; }
+.ellist li button {
+  width: 100%; display: flex; gap: 8px; align-items: center; text-align: left;
+  background: none; border-color: transparent; padding: 4px 6px; font-size: 13px;
+}
+.ellist li button:hover { background: #33373c; }
+.ellist li button svg { width: 16px; height: 16px; flex: none; color: var(--muted); }
+#ask { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 16px; width: min(360px, 90vw); }
+#ask::backdrop { background: rgba(0,0,0,.45); }
+#ask form { display: flex; flex-direction: column; gap: 10px; }
+#ask .row { display: flex; flex-direction: row-reverse; gap: 8px; justify-content: flex-start; }
 #panel h3 { font-size: 13px; margin: 14px 0 6px; }
 #panel label { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; font-size: 13px; }
 #panel label.check { flex-direction: row; align-items: center; gap: 6px; }
@@ -94,10 +158,13 @@ main { flex: 1; display: flex; min-height: 0; }
 .legrow input[type=number] { width: 100%; }
 .lanerow { padding: 6px; margin-bottom: 4px; background: #2d3035; border-radius: 6px; }
 .lanetop { display: flex; gap: 4px; align-items: center; }
-.lanetop select { flex: 1; min-width: 0; padding: 3px 4px; font-size: 12px; }
-.lanetop button { padding: 2px 6px; font-size: 12px; }
-.lanew { margin-top: 4px; font-size: 12px; color: var(--muted); }
-.lanew input { width: 58px; padding: 2px 4px; font-size: 12px; }
+.lanetop select { flex: 1; min-width: 0; padding: 3px 4px; font-size: 12.5px; }
+.lanetop button { padding: 2px 6px; font-size: 12px; min-width: 24px; }
+.lanetop button.dir { min-width: 64px; }
+.lanetop .gap { width: 4px; }
+.lanew { margin-top: 5px; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 4px; padding-left: 14px; }
+.lanew input { width: 46px; padding: 2px 4px; font-size: 12px; }
+.lanew .sep { margin: 0 4px; opacity: .5; }
 .swatch { width: 10px; height: 22px; border-radius: 2px; flex: none; border: 1px solid #000; }
 #xs svg { display: block; max-width: 100%; height: auto; margin-bottom: 6px; border-radius: 4px; }
 .linkrow { font-size: 12px; display: flex; gap: 6px; align-items: center; justify-content: space-between; margin-bottom: 4px; }
