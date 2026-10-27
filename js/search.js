@@ -86,15 +86,41 @@ async function intersectionSearch(map, { a, b, place }) {
   }));
 }
 
+// Briefly ring the spot a search found.
+let flashLayer = null;
+function goTo(map, lat, lng) {
+  map.setView([lat, lng], 19);
+  if (flashLayer) flashLayer.remove();
+  flashLayer = L.circleMarker([lat, lng], { radius: 22, color: '#ff9f1c', weight: 3, fill: false, interactive: false }).addTo(map);
+  const layer = flashLayer;
+  setTimeout(() => { if (flashLayer === layer) { layer.remove(); flashLayer = null; } }, 5000);
+}
+
 export function setupSearch(map, form, input, results) {
+  let active = -1;
+  const items = () => [...results.querySelectorAll('li[data-i]')];
+  const highlight = (i) => {
+    const list = items();
+    active = list.length ? (i + list.length) % list.length : -1;
+    list.forEach((li, j) => li.classList.toggle('active', j === active));
+  };
+  input.addEventListener('keydown', (e) => {
+    if (results.hidden) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); highlight(active + (e.key === 'ArrowDown' ? 1 : -1)); }
+    if (e.key === 'Enter' && active >= 0) { e.preventDefault(); items()[active].click(); }
+    if (e.key === 'Escape') { results.hidden = true; }
+  });
+  input.addEventListener('focus', () => { if (items().length) results.hidden = false; });
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const q = input.value.trim();
     if (!q) return;
     const coords = parseCoords(q);
-    if (coords) { map.setView([coords.lat, coords.lng], 19); results.hidden = true; return; }
+    if (coords) { goTo(map, coords.lat, coords.lng); results.hidden = true; input.blur(); return; }
     const cross = parseIntersection(q);
     results.hidden = false;
+    active = -1;
     results.innerHTML = cross
       ? '<li class="muted">Looking up intersection… this can take up to a minute.</li>'
       : '<li class="muted">Searching…</li>';
@@ -108,8 +134,9 @@ export function setupSearch(map, form, input, results) {
       results.innerHTML = hits.map((h, i) => `<li data-i="${i}">${esc(h.label)}</li>`).join('');
       results.querySelectorAll('li').forEach((li) => li.addEventListener('click', () => {
         const h = hits[+li.dataset.i];
-        map.setView([h.lat, h.lng], 19);
+        goTo(map, h.lat, h.lng);
         results.hidden = true;
+        input.blur();
       }));
     } catch (err) {
       results.innerHTML = `<li class="muted">Search failed: ${esc(err.message)}.

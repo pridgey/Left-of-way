@@ -61,7 +61,8 @@ header {
   background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
 }
 #results li { padding: 6px 8px; border-radius: 4px; cursor: pointer; }
-#results li:hover { background: #33373c; }
+#results li:hover, #results li.active { background: #33373c; }
+#results li.muted { cursor: default; }
 .units { margin-left: auto; color: var(--muted); display: flex; gap: 6px; align-items: center; }
 
 main { flex: 1; display: flex; min-height: 0; }
@@ -107,6 +108,13 @@ main { flex: 1; display: flex; min-height: 0; }
   max-width: 80%; text-align: center;
 }
 #hint { bottom: 24px; }
+#imgStatus {
+  position: absolute; top: 12px; right: 12px; z-index: 600; pointer-events: none;
+  background: rgba(20, 22, 25, .9); padding: 4px 10px; border-radius: 12px; font-size: 12px; color: var(--muted);
+}
+#imgStatus.error { color: var(--warn); border: 1px solid var(--warn); }
+.iconbtn { line-height: 0; padding: 5px 7px !important; }
+.iconbtn svg { width: 16px; height: 16px; }
 #hint:empty { display: none; }
 #toast { top: 16px; border: 1px solid var(--accent); display: flex; gap: 12px; align-items: center; pointer-events: auto; }
 #toast[hidden] { display: none; }

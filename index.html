@@ -29,6 +29,10 @@
     </details>
   </div>
   <div class="group">
+    <button id="undoBtn" class="iconbtn" title="Undo (Ctrl+Z)" aria-label="Undo" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg></button>
+    <button id="redoBtn" class="iconbtn" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/></svg></button>
+  </div>
+  <div class="group">
     <button id="openFile" title="Open a saved project file">Open</button>
     <button id="saveFile" title="Save the project to a file (Ctrl+S)">Save</button>
   </div>
@@ -54,6 +58,7 @@
       <p class="muted">Then pick a tool on the left and click the map. Everything you draw exports to Figma as named layers.</p>
       <button id="welcomeSearch" class="primary">Search for a place</button>
     </div>
+    <div id="imgStatus" hidden></div>
     <div id="hint"></div>
     <div id="toast" hidden><span id="toastMsg"></span><button id="toastUndo" hidden>Undo</button></div>
   </div>
@@ -97,7 +102,7 @@
       Click to place · drag to move · drag the blue dot to rotate (Shift snaps 15°) · orange squares aim roundabout legs<br>
       Roads, patches and paths: click points, double-click or <kbd>Enter</kbd> to finish, <kbd>Backspace</kbd> removes the last point.
       Drag the small dots to add points; <kbd>Alt</kbd>+click a point to delete it.<br>
-      <kbd>[</kbd> <kbd>]</kbd> rotate · <kbd>Ctrl+D</kbd> duplicate · <kbd>Del</kbd> delete · <kbd>Ctrl+Z</kbd> undo · <kbd>Ctrl+S</kbd> save · <kbd>Esc</kbd> cancel
+      <kbd>[</kbd> <kbd>]</kbd> rotate · <kbd>Ctrl+D</kbd> duplicate · <kbd>Del</kbd> delete · <kbd>Ctrl+Z</kbd> undo · <kbd>Ctrl+Shift+Z</kbd> redo · <kbd>Ctrl+S</kbd> save · <kbd>Esc</kbd> cancel
     </details>
   </aside>
 </main>

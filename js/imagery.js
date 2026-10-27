@@ -22,9 +22,25 @@ const ImageServerLayer = L.TileLayer.extend({
   },
 });
 
-export function createImagery(map) {
+export function createImagery(map, onStatus = () => {}) {
   let layers = [];
   let cfg = null;
+
+  // Report 'loading', 'ready' or 'error' so the page can say what's happening.
+  function watch(layer) {
+    let failed = 0, loaded = 0;
+    layer.on('loading', () => { failed = 0; loaded = 0; onStatus('loading'); });
+    layer.on('tileload', () => { loaded++; });
+    layer.on('tileerror', (e) => {
+      failed++;
+      // busy servers drop the odd tile; try each one once more
+      const img = e.tile;
+      if (img.dataset.retried) return;
+      img.dataset.retried = '1';
+      setTimeout(() => { img.src = `${img.src}${img.src.includes('?') ? '&' : '?'}retry=1`; }, 1500);
+    });
+    layer.on('load', () => onStatus(failed && !loaded ? 'error' : 'ready'));
+  }
 
   function tileTemplate() {
     if (cfg.source === 'esri') return cfg.esriKey ? ESRI + encodeURIComponent(cfg.esriKey) : null;
@@ -47,7 +63,7 @@ export function createImagery(map) {
     } else {
       layers.push(L.tileLayer(tpl, { maxNativeZoom: nativeMax(), maxZoom: 22, attribution: src.attribution, crossOrigin: 'anonymous' }));
     }
-    layers.forEach((l) => l.addTo(map));
+    layers.forEach((l) => { watch(l); l.addTo(map); });
     return src.service || tpl ? null : 'Add a key or tile URL to use this source. Showing USGS for now.';
   }
 

@@ -69,7 +69,7 @@ const ui = {
   hidden: false, opacity: 1, compare: false, swipe: 0.5,
   adjustBackdrop: false, calibrate: null, lastLanes: null, cursorPx: null, hoverId: null,
 };
-const undoStack = [];
+const undoStack = [], redoStack = [];
 const linkDirs = new Map(); // element id -> {start, end} forced road directions at connected ends
 
 let saveTimer = null, storageWarned = false;
@@ -88,13 +88,26 @@ function saveNow() {
 function checkpoint() {
   undoStack.push(JSON.stringify(els()));
   if (undoStack.length > 100) undoStack.shift();
+  redoStack.length = 0;
+  $('undoBtn').disabled = false;
+  $('redoBtn').disabled = true;
 }
-function undo() {
+function restore(from, to) {
   $('toast').hidden = true;
-  if (!undoStack.length) return;
-  project.variants[project.current].elements = JSON.parse(undoStack.pop());
+  if (!from.length) return;
+  to.push(JSON.stringify(els()));
+  project.variants[project.current].elements = JSON.parse(from.pop());
   if (!getEl(ui.selectedId)) ui.selectedId = null;
   refresh();
+}
+const undo = () => restore(undoStack, redoStack);
+const redo = () => restore(redoStack, undoStack);
+function updateUndoButtons() {
+  // the top undo entry may be a no-op snapshot (e.g. a click that didn't drag), so compare
+  const cur = JSON.stringify(els());
+  while (undoStack.length && undoStack[undoStack.length - 1] === cur) undoStack.pop();
+  $('undoBtn').disabled = !undoStack.length;
+  $('redoBtn').disabled = !redoStack.length;
 }
 
 // ---------- units ----------
@@ -107,7 +120,20 @@ const unitLabel = () => (project.units === 'ft' ? 'ft' : 'm');
 const map = L.map('map', { minZoom: 4, maxZoom: 22, zoomControl: true });
 if (project.view) map.setView([project.view[0], project.view[1]], project.view[2]);
 else map.setView([39.5, -98.35], 4);
-const imagery = createImagery(map);
+let statusTimer = null;
+const imagery = createImagery(map, (state) => {
+  const el = $('imgStatus');
+  clearTimeout(statusTimer);
+  el.classList.toggle('error', state === 'error');
+  if (state === 'ready') { el.hidden = true; return; }
+  if (state === 'error') {
+    el.textContent = 'Aerial photo didn\'t load here. Try another source under Imagery.';
+    el.hidden = false;
+    return;
+  }
+  // only mention loading if it's slow
+  statusTimer = setTimeout(() => { el.textContent = 'Loading aerial photo…'; el.hidden = false; }, 600);
+});
 let imageryNote = imagery.apply(project.imagery);
 L.control.scale({ position: 'bottomleft' }).addTo(map);
 
@@ -358,6 +384,7 @@ function refresh() {
   render();
   renderProps();
   updateWelcome();
+  updateUndoButtons();
   clearTimeout(qtyTimer);
   qtyTimer = setTimeout(renderQuantities, 150);
   save();
@@ -1168,6 +1195,7 @@ function switchVariant(i) {
   ui.selectedId = null;
   ui.draft = null;
   undoStack.length = 0;
+  redoStack.length = 0;
   renderVariants();
   refresh();
 }
@@ -1230,7 +1258,7 @@ function wireFiles() {
     try {
       const p = normalizeProject(JSON.parse(await file.text()));
       project = p;
-      ui.selectedId = null; ui.draft = null; undoStack.length = 0;
+      ui.selectedId = null; ui.draft = null; undoStack.length = 0; redoStack.length = 0;
       if (p.view) map.setView([p.view[0], p.view[1]], p.view[2]);
       imageryNote = imagery.apply(p.imagery);
       $('units').value = p.units;
@@ -1290,6 +1318,8 @@ async function runExport(action) {
   const status = $('status');
   if (map.getZoom() < 15) { status.textContent = 'Zoom in further before exporting (street level).'; return; }
   status.textContent = project.exportAerial ? 'Fetching aerial photo…' : 'Building SVG…';
+  const buttons = [$('copy'), $('download')];
+  buttons.forEach((b) => { b.disabled = true; });
   try {
     const svg = await buildSvg();
     const mb = (svg.length / 1e6).toFixed(1);
@@ -1304,6 +1334,8 @@ async function runExport(action) {
     status.textContent = action === 'copy' && err.name === 'NotAllowedError'
       ? 'Clipboard blocked by the browser. Use Download instead.'
       : `Export failed: ${err.message}`;
+  } finally {
+    buttons.forEach((b) => { b.disabled = false; });
   }
 }
 
@@ -1313,7 +1345,8 @@ document.addEventListener('keydown', (e) => {
   if (e.target.matches('input:not([type=checkbox]):not([type=range]), select, textarea')) return;
   const mod = e.ctrlKey || e.metaKey;
   const k = e.key.toLowerCase();
-  if (mod && k === 'z') { e.preventDefault(); undo(); return; }
+  if (mod && k === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
+  if (mod && k === 'y') { e.preventDefault(); redo(); return; }
   if (mod && k === 'd') { e.preventDefault(); duplicate(); return; }
   if (mod && k === 's') { e.preventDefault(); $('saveFile').click(); return; }
   if (mod) return;
@@ -1361,6 +1394,8 @@ $('units').addEventListener('change', (e) => { project.units = e.target.value; r
 $('exportAerial').checked = project.exportAerial;
 $('exportAerial').addEventListener('change', (e) => { project.exportAerial = e.target.checked; save(); });
 $('copy').onclick = () => runExport('copy');
+$('undoBtn').onclick = () => undo();
+$('redoBtn').onclick = () => redo();
 $('download').onclick = () => runExport('download');
 setupSearch(map, $('search'), $('q'), $('results'));
 buildToolbar();
