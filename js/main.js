@@ -874,7 +874,7 @@ function wireProps(el) {
   if (add) add.onclick = () => {
     checkpoint();
     const L = el.p.lanes;
-    L.splice(Math.ceil(L.length / 2), 0, { type: 'travel', w: 3.3, w2: null, dir: 'fwd' });
+    L.splice(Math.ceil(L.length / 2), 0, { type: 'travel', w: LANE_TYPES.travel.def, w2: null, dir: 'fwd' });
     refresh();
   };
   const flip = props.querySelector('[data-flip]');
