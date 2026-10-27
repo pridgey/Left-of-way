@@ -1181,8 +1181,22 @@ function renderQuantities() {
   $('qtySec').innerHTML = rows
     ? `<table class="qty"><tr><th></th><th>${project.units === 'ft' ? 'sq ft' : 'm²'}</th><th>${costLabel}</th><th>Cost</th></tr>${rows}
         <tr class="total"><td colspan="3">Rough total</td><td>$${Math.round(total).toLocaleString()}</td></tr></table>
-       <p class="muted small">Placeholder prices for a first-pass estimate; edit them for your area. Excludes drainage, utilities, signals and design fees.</p>`
+       <div class="row"><button id="qtyCopy">Copy as table</button></div>
+       <p class="muted small">Placeholder prices for a first-pass estimate; edit them for your area. Excludes drainage, utilities, signals and design fees. "Copy as table" pastes into a spreadsheet or doc.</p>`
     : '<p class="muted small">Quantities appear here as you draw.</p>';
+  const copyBtn = $('qtyCopy');
+  if (copyBtn) copyBtn.onclick = async () => {
+    // tab-separated, so it pastes into spreadsheets as cells
+    const lines = [...$('qtySec').querySelectorAll('table.qty tr')].map((tr) => [...tr.children].map((td) => {
+      const input = td.querySelector('input');
+      return (input ? input.value : td.textContent).trim();
+    }).join('\t'));
+    lines[0] = ['Item', ...lines[0].split('\t').slice(1)].join('\t');
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'));
+      toast('Quantities copied. Paste into a spreadsheet or document.');
+    } catch { toast('Clipboard blocked by the browser.'); }
+  };
   $('qtySec').querySelectorAll('[data-cost]').forEach((input) => input.addEventListener('change', () => {
     const k = input.dataset.cost, v = parseFloat(input.value);
     if (!(v >= 0)) return;
@@ -1254,7 +1268,8 @@ function download(text, filename, type) {
 function wireFiles() {
   $('saveFile').onclick = () => {
     saveNow();
-    download(JSON.stringify(project), `road-draft-${new Date().toISOString().slice(0, 10)}.json`, 'application/json');
+    download(JSON.stringify(project), `${fileStem()}.json`, 'application/json');
+    toast('Project file saved to your downloads. Use Open to load it again.');
   };
   $('openFile').onclick = () => $('projFile').click();
   $('projFile').addEventListener('change', async (e) => {
@@ -1277,6 +1292,12 @@ function wireFiles() {
 }
 
 // ---------- export ----------
+// Notes, measurements and turning paths export in their own group so they're easy to hide in Figma.
+const ANNOTATIONS = new Set(['note', 'dimension', 'vehicle']);
+const fileStem = () => {
+  const name = project.variants[project.current].name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return `road-draft-${name || 'option'}-${new Date().toLocaleDateString('en-CA')}`;
+};
 function scaleBar(W, H) {
   const lat = map.getCenter().lat;
   const pxPerUnit = ppm(lat) / (project.units === 'ft' ? M2FT : 1);
@@ -1302,19 +1323,22 @@ async function buildSvg() {
   }
   resolveLinks();
   const counts = new Map();
-  const body = els().map((el) => {
+  const layer = (el) => {
     let name = nameOf(el);
     const c = (counts.get(name) || 0) + 1;
     counts.set(name, c);
     if (c > 1) name += ` (${c})`;
     return markup(el, { interactive: false, layerName: name });
-  }).join('\n');
+  };
+  const body = els().filter((el) => !ANNOTATIONS.has(el.type)).map(layer).join('\n');
+  const notes = els().filter((el) => ANNOTATIONS.has(el.type)).map(layer).join('\n');
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
 ${bg}
 ${backdropMarkup(false)}
 <g id="${esc(project.variants[project.current].name)}">
 ${body}
 </g>
+${notes ? `<g id="Annotations">\n${notes}\n</g>` : ''}
 ${scaleBar(W, H)}
 ${credit ? `<text id="Attribution" x="${W - 8}" y="${H - 8}" fill="#fff" fill-opacity="0.85" font-family="Inter, sans-serif" font-size="11" text-anchor="end">${esc(credit)}</text>` : ''}
 </svg>`;
@@ -1322,7 +1346,7 @@ ${credit ? `<text id="Attribution" x="${W - 8}" y="${H - 8}" fill="#fff" fill-op
 
 async function runExport(action) {
   const status = $('status');
-  if (map.getZoom() < 15) { status.textContent = 'Zoom in further before exporting (street level).'; return; }
+  if (map.getZoom() < 15) { status.textContent = 'Zoom in further before exporting (street level).'; toast(status.textContent); return; }
   status.textContent = project.exportAerial ? 'Fetching aerial photo…' : 'Building SVG…';
   const buttons = [$('copy'), $('download')];
   buttons.forEach((b) => { b.disabled = true; });
@@ -1333,13 +1357,15 @@ async function runExport(action) {
       await navigator.clipboard.writeText(svg);
       status.textContent = `Copied (${mb} MB). Paste into Figma with Ctrl+V.`;
     } else {
-      download(svg, `road-draft-${new Date().toISOString().slice(0, 10)}.svg`, 'image/svg+xml');
+      download(svg, `${fileStem()}.svg`, 'image/svg+xml');
       status.textContent = `Downloaded (${mb} MB). Drag the file into Figma.`;
     }
+    toast(status.textContent);
   } catch (err) {
     status.textContent = action === 'copy' && err.name === 'NotAllowedError'
       ? 'Clipboard blocked by the browser. Use Download instead.'
       : `Export failed: ${err.message}`;
+    toast(status.textContent);
   } finally {
     buttons.forEach((b) => { b.disabled = false; });
   }

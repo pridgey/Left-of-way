@@ -58,10 +58,21 @@ busy, so they can be slow or fail. Pasting a Google Maps link is the most reliab
 - **Item list:** with nothing selected, the right panel lists everything in the current option. Click an entry to select it.
 - **Before / after slider** and proposal opacity in the View panel. Press H to hide the proposal.
 - **Quantities and cost:** rough areas of asphalt, concrete, landscaping and paint, with editable
-  placeholder unit prices.
+  placeholder unit prices. "Copy as table" pastes them into a spreadsheet or document.
 - **Cross-sections:** each road shows its cross-section and can download it as an SVG.
 - **Project files:** Save / Open a `.json` file with everything, including the screenshot. Work is also
   saved in the browser automatically.
+
+## Editing
+
+- Undo / redo: the arrow buttons in the header, or Ctrl+Z / Ctrl+Shift+Z.
+- Arrow keys nudge the selected item (Shift for 10×). Esc deselects.
+- Hide the side panel with the panel button in the header or the `\` key.
+
+## In Figma
+
+The export has one layer per element inside a group named after the design option. Notes,
+measurements and turning paths go in a separate **Annotations** group so you can hide them in one click.
 
 ## Code
 
