@@ -36,8 +36,9 @@
     <button id="openFile" title="Open a saved project file">Open</button>
     <button id="saveFile" title="Save the project to a file (Ctrl+S)">Save</button>
   </div>
-  <label class="units">Units
-    <select id="units"><option value="ft">feet</option><option value="m">meters</option></select>
+  <button id="panelToggle" class="iconbtn" title="Show / hide the side panel (\)" aria-label="Show or hide the side panel" aria-pressed="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button>
+  <label class="units"><span>Units</span>
+    <select id="units" aria-label="Units"><option value="ft">feet</option><option value="m">meters</option></select>
   </label>
   <input type="file" id="bdFile" accept="image/*" hidden>
   <input type="file" id="projFile" accept=".json,application/json" hidden>
@@ -47,7 +48,7 @@
   <nav id="tools" aria-label="Tools"></nav>
 
   <div id="stage">
-    <div id="map"></div>
+    <div id="map" role="application" aria-label="Map"></div>
     <svg id="overlay" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
       <defs><clipPath id="swipeClip"><rect id="swipeRect" x="0" y="0" width="0" height="10000"/></clipPath></defs>
       <g id="bd"></g><g id="els"></g><g id="draft"></g><g id="sel"></g>
@@ -59,8 +60,8 @@
       <button id="welcomeSearch" class="primary">Search for a place</button>
     </div>
     <div id="imgStatus" hidden></div>
-    <div id="hint"></div>
-    <div id="toast" hidden><span id="toastMsg"></span><button id="toastUndo" hidden>Undo</button></div>
+    <div id="hint" role="status" aria-live="polite"></div>
+    <div id="toast" role="status" aria-live="polite" hidden><span id="toastMsg"></span><button id="toastUndo" hidden>Undo</button></div>
   </div>
 
   <aside id="panel">
@@ -102,7 +103,7 @@
       Click to place · drag to move · drag the blue dot to rotate (Shift snaps 15°) · orange squares aim roundabout legs<br>
       Roads, patches and paths: click points, double-click or <kbd>Enter</kbd> to finish, <kbd>Backspace</kbd> removes the last point.
       Drag the small dots to add points; <kbd>Alt</kbd>+click a point to delete it.<br>
-      <kbd>[</kbd> <kbd>]</kbd> rotate · arrow keys nudge (<kbd>Shift</kbd> for 10×) · <kbd>Ctrl+D</kbd> duplicate · <kbd>Del</kbd> delete · <kbd>Ctrl+Z</kbd> undo · <kbd>Ctrl+Shift+Z</kbd> redo · <kbd>Ctrl+S</kbd> save · <kbd>Esc</kbd> cancel
+      <kbd>[</kbd> <kbd>]</kbd> rotate · arrow keys nudge (<kbd>Shift</kbd> for 10×) · <kbd>Ctrl+D</kbd> duplicate · <kbd>Del</kbd> delete · <kbd>Ctrl+Z</kbd> undo · <kbd>Ctrl+Shift+Z</kbd> redo · <kbd>Ctrl+S</kbd> save · <kbd>\</kbd> hide panel · <kbd>Esc</kbd> cancel
     </details>
   </aside>
 </main>

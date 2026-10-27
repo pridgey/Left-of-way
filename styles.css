@@ -63,7 +63,10 @@ header {
 #results li { padding: 6px 8px; border-radius: 4px; cursor: pointer; }
 #results li:hover, #results li.active { background: #33373c; }
 #results li.muted { cursor: default; }
-.units { margin-left: auto; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+.units { color: var(--muted); display: flex; gap: 6px; align-items: center; }
+#panelToggle { margin-left: auto; }
+#panelToggle[aria-pressed="false"] { border-color: var(--line); color: var(--muted); }
+body.no-panel #panel { display: none; }
 
 main { flex: 1; display: flex; min-height: 0; }
 #tools {
@@ -82,7 +85,7 @@ main { flex: 1; display: flex; min-height: 0; }
   position: absolute; top: 2px; right: 3px; font-size: 9px; line-height: 1; padding: 2px 3px;
   color: var(--muted); background: none; border: 0; opacity: .8;
 }
-#tools button span { font-size: 10.5px; color: var(--muted); text-align: center; line-height: 1.15; }
+#tools button span { font-size: 11px; color: #b4b9bf; text-align: center; line-height: 1.15; }
 #tools button.active { border-color: var(--accent); background: #243447; }
 #tools button.active span { color: var(--text); }
 
@@ -191,6 +194,22 @@ table.qty input { width: 58px; padding: 2px 4px; font-size: 12px; }
 table.qty .total td { border-top: 1px solid var(--line); font-weight: 600; padding-top: 6px; }
 
 .muted { color: var(--muted); }
+
+/* smaller windows: tighter header and narrower side columns */
+@media (max-width: 1180px) {
+  header { gap: 8px; }
+  #search { min-width: 160px; }
+  .group > label, .units > span { display: none; }
+  #panel { width: 280px; }
+}
+@media (max-width: 960px) {
+  .brand { display: none; }
+  #tools { width: 116px; grid-template-columns: 1fr 1fr; padding: 6px; }
+  #tools button { min-height: 40px; padding: 6px 0; }
+  #tools button span, #tools .key, #tools .tool-group { display: none; }
+  #tools .tool-group { display: block; grid-column: 1 / -1; height: 1px; background: var(--line); margin: 4px 0; font-size: 0; }
+  #panel { width: 260px; }
+}
 .small { font-size: 12px; }
 kbd { background: #33373c; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font-size: 11px; }
 button.danger:hover { border-color: #e0574f; }

@@ -458,7 +458,10 @@ function setTool(name) {
   if (ui.draft && ui.draft.type !== name) ui.draft = null;
   ui.calibrate = null;
   ui.tool = name;
-  $('tools').querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.tool === name));
+  $('tools').querySelectorAll('button').forEach((b) => {
+    b.classList.toggle('active', b.dataset.tool === name);
+    b.setAttribute('aria-pressed', b.dataset.tool === name);
+  });
   overlay.classList.toggle('placing', name !== 'select');
   map.getContainer().style.cursor = name === 'select' ? '' : 'crosshair';
   const drawing = name !== 'select' && TYPES[name].kind === 'path';
@@ -1389,6 +1392,7 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (k === 'v') { setTool('select'); return; }
+  if (e.key === '\\') { togglePanel(); return; }
   if (k === 'h') { ui.hidden = !ui.hidden; $('showProposal').checked = !ui.hidden; render(); return; }
   const tool = Object.entries(TYPES).find(([, t]) => t.key === k);
   if (tool) { setTool(tool[0]); return; }
@@ -1422,6 +1426,15 @@ $('exportAerial').checked = project.exportAerial;
 $('exportAerial').addEventListener('change', (e) => { project.exportAerial = e.target.checked; save(); });
 $('copy').onclick = () => runExport('copy');
 $('undoBtn').onclick = () => undo();
+function togglePanel(show = document.body.classList.contains('no-panel')) {
+  document.body.classList.toggle('no-panel', !show);
+  $('panelToggle').setAttribute('aria-pressed', show);
+  map.invalidateSize();
+  render();
+  try { localStorage.setItem('road-drafter-panel', show ? '1' : '0'); } catch { /* ignore */ }
+}
+$('panelToggle').onclick = () => togglePanel();
+try { if (localStorage.getItem('road-drafter-panel') === '0') togglePanel(false); } catch { /* ignore */ }
 $('redoBtn').onclick = () => redo();
 $('download').onclick = () => runExport('download');
 setupSearch(map, $('search'), $('q'), $('results'));
