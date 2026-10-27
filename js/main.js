@@ -614,7 +614,10 @@ window.addEventListener('pointermove', (e) => {
     const dx = p[0] - d.start[0], dy = p[1] - d.start[1];
     if (d.el.pts) {
       d.el.pts = d.origin.map((q) => fromPx(q[0] + dx, q[1] + dy));
-      if (d.el.p.links) d.el.p.links = {};
+      if (d.el.p.links && (d.el.p.links.start || d.el.p.links.end)) {
+        d.el.p.links = {};
+        toast('Road disconnected. Drag an end onto an orange dot to reconnect.', { undoable: true });
+      }
     } else {
       const ll = fromPx(d.origin[0] + dx, d.origin[1] + dy);
       d.el.lat = ll[0];
@@ -1340,6 +1343,27 @@ async function runExport(action) {
 }
 
 // ---------- keyboard ----------
+// With something selected, arrow keys nudge it instead of panning the map (Leaflet listens on the map itself).
+document.addEventListener('keydown', (e) => {
+  if (!e.key.startsWith('Arrow') || !getEl(ui.selectedId) || e.ctrlKey || e.metaKey) return;
+  if (e.target.matches('input:not([type=checkbox]), select, textarea')) return;
+  e.stopPropagation();
+  e.preventDefault();
+  nudge(e);
+}, true);
+
+// Move the selection by 1 screen pixel, or 10 with Shift.
+function nudge(e) {
+  const el = getEl(ui.selectedId), step = e.shiftKey ? 10 : 1;
+  const dx = { ArrowLeft: -step, ArrowRight: step }[e.key] || 0, dy = { ArrowUp: -step, ArrowDown: step }[e.key] || 0;
+  if (!e.repeat) checkpoint();
+  const shift = (lat, lng) => { const [x, y] = toPx(lat, lng); return fromPx(x + dx, y + dy); };
+  if (el.pts) {
+    el.pts = el.pts.map((q) => shift(q[0], q[1]));
+    if (el.p.links) el.p.links = {};
+  } else [el.lat, el.lng] = shift(el.lat, el.lng);
+  render(); save();
+}
 document.addEventListener('keydown', (e) => {
   // checkboxes and sliders shouldn't swallow shortcuts; text boxes and dropdowns should
   if (e.target.matches('input:not([type=checkbox]):not([type=range]), select, textarea')) return;
@@ -1356,6 +1380,9 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Backspace') { ui.draft.pts.pop(); if (!ui.draft.pts.length) ui.draft = null; render(); return; }
   }
   if (e.key === 'Escape') {
+    if (ui.tool === 'select' && !ui.calibrate && !ui.adjustBackdrop && ui.selectedId) {
+      ui.selectedId = null; render(); renderProps(); return;
+    }
     ui.calibrate = null;
     if (ui.adjustBackdrop) { ui.adjustBackdrop = false; overlay.classList.remove('adjusting'); renderImagery(); }
     setTool('select');

@@ -231,7 +231,7 @@ const diverter = {
       rx="${n(Math.min(w / 2, 0.8) * s)}" fill="${p.planted ? C.green : C.concrete}" ${curbStroke(s)}/>`;
     const body = g > 0 ? piece(-Ld / 2, -g / 2) + piece(g / 2, Ld / 2) : piece(-Ld / 2, Ld / 2);
     return `<rect x="${n(-p.size / 2 * s)}" y="${n(-p.size / 2 * s)}" width="${n(p.size * s)}" height="${n(p.size * s)}"
-        fill="none" stroke="#fff" stroke-opacity="0.35" stroke-width="${n(0.15 * s)}" stroke-dasharray="${n(1 * s)} ${n(1 * s)}" data-hit="1"/>
+        fill="#000" fill-opacity="0.001" stroke="#fff" stroke-opacity="0.35" stroke-width="${n(0.15 * s)}" stroke-dasharray="${n(1 * s)} ${n(1 * s)}" data-hit="1"/>
       <g transform="rotate(45)">${body}</g>`;
   },
   warnings: (p, f) => (p.bikeGap && p.gap < 1.5 ? [`Bike gaps are usually at least ${f(1.5)} wide.`] : []),
@@ -304,7 +304,7 @@ const chicane = {
     const one = (x, y, sign) => `<g transform="translate(${n(x * s)} ${n(y * s)})">
       <path d="${bumpPath(p.length, p.depth, p.taper, s, sign)}" fill="${fill}" ${curbStroke(s)}/></g>`;
     return `<rect x="${n((-p.spacing / 2 - p.length / 2) * s)}" y="${n(-p.roadWidth / 2 * s)}"
-        width="${n((p.spacing + p.length) * s)}" height="${n(p.roadWidth * s)}" fill="none" stroke="#fff" stroke-opacity="0.3"
+        width="${n((p.spacing + p.length) * s)}" height="${n(p.roadWidth * s)}" fill="#000" fill-opacity="0.001" stroke="#fff" stroke-opacity="0.3"
         stroke-width="${n(0.12 * s)}" stroke-dasharray="${n(1 * s)} ${n(1 * s)}" data-hit="1"/>
       ${one(-p.spacing / 2, -p.roadWidth / 2, 1)}${one(p.spacing / 2, p.roadWidth / 2, -1)}`;
   },

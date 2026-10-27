@@ -92,6 +92,7 @@ main { flex: 1; display: flex; min-height: 0; }
 #overlay.hidden { visibility: hidden; }
 #overlay g[data-id] * { pointer-events: visiblePainted; cursor: move; }
 #overlay.placing g[data-id] *, #overlay.adjusting g[data-id] * { pointer-events: none; }
+#overlay:not(.placing):not(.adjusting) #els g[data-id]:hover { filter: drop-shadow(0 0 2px #2f9bff) drop-shadow(0 0 1px #2f9bff); }
 #overlay .handle { pointer-events: all; cursor: grab; }
 #overlay .port { pointer-events: none; }
 #overlay.adjusting [data-bd] { pointer-events: all; cursor: move; }
