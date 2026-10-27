@@ -183,7 +183,7 @@ const raised = {
     { k: 'height', label: 'Depth (north-south)', type: 'len', def: F(45), min: 6, max: 40 },
     { k: 'ramp', label: 'Ramp length', type: 'len', def: F(6), min: 0.6, max: 4 },
     { k: 'crosswalks', label: 'Crosswalks on all sides', type: 'bool', def: true },
-    { k: 'xwWidth', label: 'Crosswalk width', type: 'len', def: F(10), min: 1.8, max: 6 },
+    { k: 'xwWidth', label: 'Crosswalk width', type: 'len', def: F(10), min: 1.8, max: 6, when: (p) => p.crosswalks },
   ],
   bbox: (p) => [-p.width / 2 - p.ramp, -p.height / 2 - p.ramp, p.width / 2 + p.ramp, p.height / 2 + p.ramp],
   ports: (p) => [
@@ -220,7 +220,7 @@ const diverter = {
     { k: 'size', label: 'Intersection size', type: 'len', def: F(40), min: 6, max: 30 },
     { k: 'width', label: 'Island width', type: 'len', def: F(7), min: 1, max: 5 },
     { k: 'bikeGap', label: 'Gap for bikes', type: 'bool', def: true },
-    { k: 'gap', label: 'Gap width', type: 'len', def: F(6), min: 1.2, max: 3 },
+    { k: 'gap', label: 'Gap width', type: 'len', def: F(6), min: 1.2, max: 3, when: (p) => p.bikeGap },
     { k: 'planted', label: 'Planted', type: 'bool', def: true },
   ],
   bbox: (p) => [-p.size / 2, -p.size / 2, p.size / 2, p.size / 2],
@@ -252,9 +252,9 @@ const bumpout = {
     { k: 'taper', label: 'End taper', type: 'len', def: F(8), min: 0.5, max: 8 },
     { k: 'planter', label: 'Planting strip', type: 'bool', def: true },
     { k: 'crosswalk', label: 'Crosswalk from bumpout', type: 'bool', def: false },
-    { k: 'xwLen', label: 'Street width to cross', type: 'len', def: F(30), min: 3, max: 30 },
-    { k: 'xwWidth', label: 'Crosswalk width', type: 'len', def: F(10), min: 1.8, max: 6 },
-    { k: 'xwShift', label: 'Crosswalk position along curb', type: 'len', def: 0, min: -15, max: 15 },
+    { k: 'xwLen', label: 'Street width to cross', type: 'len', def: F(30), min: 3, max: 30, when: (p) => p.crosswalk },
+    { k: 'xwWidth', label: 'Crosswalk width', type: 'len', def: F(10), min: 1.8, max: 6, when: (p) => p.crosswalk },
+    { k: 'xwShift', label: 'Crosswalk position along curb', type: 'len', def: 0, min: -15, max: 15, when: (p) => p.crosswalk },
   ],
   bbox: (p) => [Math.min(-p.length / 2, p.crosswalk ? p.xwShift - p.xwWidth / 2 : 0), 0,
     Math.max(p.length / 2, p.crosswalk ? p.xwShift + p.xwWidth / 2 : 0), p.depth + (p.crosswalk ? p.xwLen : 0)],
@@ -323,8 +323,8 @@ const hump = {
     { k: 'kind', label: 'Type', type: 'select', def: 'hump', options: [['hump', 'Speed hump'], ['table', 'Speed table'], ['cushion', 'Speed cushions']] },
     { k: 'roadWidth', label: 'Width across street', type: 'len', def: F(30), min: 3, max: 20 },
     { k: 'depth', label: 'Length along street', type: 'len', def: F(12), min: 2, max: 10 },
-    { k: 'padWidth', label: 'Cushion pad width', type: 'len', def: F(6), min: 1.2, max: 3 },
-    { k: 'padGap', label: 'Gap between pads', type: 'len', def: F(3), min: 0.5, max: 2 },
+    { k: 'padWidth', label: 'Cushion pad width', type: 'len', def: F(6), min: 1.2, max: 3, when: (p) => p.kind === 'cushion' },
+    { k: 'padGap', label: 'Gap between pads', type: 'len', def: F(3), min: 0.5, max: 2, when: (p) => p.kind === 'cushion' },
   ],
   bbox: (p) => [-p.roadWidth / 2, -p.depth / 2, p.roadWidth / 2, p.depth / 2],
   name: (p, f) => `${{ hump: 'Speed hump', table: 'Speed table', cushion: 'Speed cushions' }[p.kind]} ${f(p.roadWidth)}`,
@@ -371,7 +371,7 @@ const refuge = {
     { k: 'width', label: 'Island width', type: 'len', def: F(8), min: 1, max: 6 },
     { k: 'planted', label: 'Planted', type: 'bool', def: true },
     { k: 'crosswalk', label: 'Crosswalk through island', type: 'bool', def: true },
-    { k: 'xwWidth', label: 'Crosswalk width', type: 'len', def: F(10), min: 1.8, max: 6 },
+    { k: 'xwWidth', label: 'Crosswalk width', type: 'len', def: F(10), min: 1.8, max: 6, when: (p) => p.crosswalk },
   ],
   bbox: (p) => (p.crosswalk
     ? [-Math.max(p.length, p.xwWidth) / 2, -p.roadWidth / 2, Math.max(p.length, p.xwWidth) / 2, p.roadWidth / 2]
@@ -474,7 +474,7 @@ const sharrow = {
 // ---------- streetscape ----------
 
 const tree = {
-  kind: 'point', label: 'Tree', group: 'Streetscape', key: null,
+  kind: 'point', label: 'Tree', group: 'Streetscape', key: null, noRotate: true,
   params: [{ k: 'diameter', label: 'Canopy diameter', type: 'len', def: F(20), min: 2, max: 15 }],
   bbox: (p) => [-p.diameter / 2, -p.diameter / 2, p.diameter / 2, p.diameter / 2],
   name: (p, f) => `Tree ${f(p.diameter)}`,
@@ -523,7 +523,7 @@ const note = {
     const w = (p.text.length * p.size * 0.56 + 12) / s / 2, h = (p.size + 10) / s / 2;
     return [-w, -h, w, h];
   },
-  name: (p) => `Note: ${p.text.slice(0, 30)}`,
+  name: (p) => `Note “${p.text.length > 28 ? p.text.slice(0, 28) + '…' : p.text}”`,
   svg(p) {
     const w = p.text.length * p.size * 0.56 + 12, h = p.size + 10;
     const esc = p.text.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));

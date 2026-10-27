@@ -67,7 +67,7 @@ const getEl = (id) => els().find((e) => e.id === id);
 const ui = {
   tool: 'select', selectedId: null, draft: null, cursor: null, drag: null,
   hidden: false, opacity: 1, compare: false, swipe: 0.5,
-  adjustBackdrop: false, calibrate: null, lastLanes: null, cursorPx: null,
+  adjustBackdrop: false, calibrate: null, lastLanes: null, cursorPx: null, hoverId: null,
 };
 const undoStack = [];
 const linkDirs = new Map(); // element id -> {start, end} forced road directions at connected ends
@@ -219,8 +219,8 @@ function selectionMarkup() {
     let out = `<g transform="translate(${n(x)} ${n(y)}) rotate(${n(el.rot)})">
       <rect x="${n(x0 - pad)}" y="${n(y0 - pad)}" width="${n(x1 - x0 + 2 * pad)}" height="${n(y1 - y0 + 2 * pad)}"
         fill="none" stroke="#2f9bff" stroke-width="1.5" stroke-dasharray="6 4"/>
-      <line x1="0" y1="${n(y0 - pad)}" x2="0" y2="${n(hy)}" stroke="#2f9bff" stroke-width="1.5"/>
-      <circle class="handle rot" cx="0" cy="${n(hy)}" r="7" fill="#2f9bff" stroke="#fff" stroke-width="2"/></g>`;
+      ${t.noRotate ? '' : `<line x1="0" y1="${n(y0 - pad)}" x2="0" y2="${n(hy)}" stroke="#2f9bff" stroke-width="1.5"/>
+      <circle class="handle rot" cx="0" cy="${n(hy)}" r="7" fill="#2f9bff" stroke="#fff" stroke-width="2"><title>Drag to rotate (Shift snaps to 15°)</title></circle>`}</g>`;
     if (t.legs) {
       portsOf(el).forEach((p, i) => {
         const [px, py] = toPx(p.ll[0], p.ll[1]);
@@ -253,6 +253,21 @@ function selectionMarkup() {
     out += `<g transform="translate(${n(mx)} ${n(my)}) rotate(${n(ang)})"><path d="M -8 -8 L 6 0 L -8 8" fill="none" stroke="#2f9bff" stroke-width="3"/></g>`;
   }
   return out;
+}
+
+// Outline the element under the pointer in the item list.
+function hoverMarkup() {
+  const el = ui.hoverId !== ui.selectedId && getEl(ui.hoverId);
+  if (!el) return '';
+  const t = TYPES[el.type];
+  const style = 'fill="none" stroke="#fff" stroke-width="2" stroke-dasharray="5 4"';
+  if (t.kind === 'point') {
+    const s = ppm(el.lat), [x, y] = toPx(el.lat, el.lng);
+    const [x0, y0, x1, y1] = t.bbox(el.p, s).map((v) => v * s);
+    return `<g transform="translate(${n(x)} ${n(y)}) rotate(${n(el.rot)})"><rect x="${n(x0 - 6)}" y="${n(y0 - 6)}"
+      width="${n(x1 - x0 + 12)}" height="${n(y1 - y0 + 12)}" rx="4" ${style}/></g>`;
+  }
+  return `<path d="${pathD(el.pts.map((q) => toPx(q[0], q[1])), t.closed)}" stroke-opacity="0.9" ${style}/>`;
 }
 
 function portsMarkup() {
@@ -317,8 +332,11 @@ function compareMarkup(W, H) {
     <g data-swipe="1" class="handle" transform="translate(${n(x)} ${n(H / 2)})">
       <circle r="16" fill="#2f9bff" stroke="#fff" stroke-width="2"/>
       <path d="M -6 -5 L -11 0 L -6 5 M 6 -5 L 11 0 L 6 5" fill="none" stroke="#fff" stroke-width="2"/></g>
-    <text x="${n(x - 12)}" y="22" text-anchor="end" fill="#fff" font-size="13" font-weight="600" paint-order="stroke" stroke="#000" stroke-width="3">Proposal</text>
-    <text x="${n(x + 12)}" y="22" fill="#fff" font-size="13" font-weight="600" paint-order="stroke" stroke="#000" stroke-width="3">Existing</text>`;
+    <g font-size="13" font-weight="600" font-family="system-ui, sans-serif">
+      <rect x="${n(x - 92)}" y="${n(H / 2 + 28)}" width="80" height="24" rx="12" fill="#2f9bff"/>
+      <text x="${n(x - 52)}" y="${n(H / 2 + 45)}" text-anchor="middle" fill="#fff">Proposal</text>
+      <rect x="${n(x + 12)}" y="${n(H / 2 + 28)}" width="80" height="24" rx="12" fill="rgba(20,22,25,.85)"/>
+      <text x="${n(x + 52)}" y="${n(H / 2 + 45)}" text-anchor="middle" fill="#fff">Existing</text></g>`;
 }
 
 function render() {
@@ -332,7 +350,7 @@ function render() {
     elsLayer.setAttribute('clip-path', 'url(#swipeClip)');
   } else elsLayer.removeAttribute('clip-path');
   draftLayer.innerHTML = draftMarkup();
-  selLayer.innerHTML = selectionMarkup() + portsMarkup() + compareMarkup(W, H);
+  selLayer.innerHTML = hoverMarkup() + selectionMarkup() + portsMarkup() + compareMarkup(W, H);
 }
 
 let qtyTimer = null;
@@ -385,7 +403,7 @@ function updateHint() {
   if (ui.calibrate) {
     hint.textContent = ui.calibrate.pts.length ? 'Click the second point' : 'Click the first of two points a known distance apart on the screenshot';
   } else if (ui.adjustBackdrop) {
-    hint.textContent = 'Drag the screenshot to line it up with the aerial photo';
+    hint.textContent = 'Drag the screenshot to line it up with the aerial photo. Press Esc when done.';
   } else if (ui.tool === 'select') {
     hint.textContent = '';
   } else {
@@ -727,10 +745,11 @@ function renderProps() {
         <ul class="ellist">${list.map((e, i) => ({ e, i })).reverse().map(({ e }) => `<li><button data-pick="${e.id}">${ICONS[e.type] || ''}<span>${esc(nameOf(e))}</span></button></li>`).join('')}</ul>
         <button id="clear" class="danger">Clear all</button>`
       : `<h2>Properties</h2><p class="muted">Pick a tool on the left and click the map. Click anything you've drawn to edit it.</p>`;
-    props.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', () => {
-      ui.selectedId = b.dataset.pick;
-      render(); renderProps();
-    }));
+    props.querySelectorAll('[data-pick]').forEach((b) => {
+      b.addEventListener('click', () => { ui.selectedId = b.dataset.pick; ui.hoverId = null; render(); renderProps(); });
+      b.addEventListener('pointerenter', () => { ui.hoverId = b.dataset.pick; render(); });
+      b.addEventListener('pointerleave', () => { ui.hoverId = null; render(); });
+    });
     const clear = $('clear');
     if (clear) clear.onclick = () => {
       checkpoint();
@@ -748,12 +767,12 @@ function renderProps() {
       <button data-act="back" title="Send to back" aria-label="Send to back">${ACT_ICONS.back}</button>
       <button data-act="del" class="danger" title="Delete (Del)" aria-label="Delete">${ACT_ICONS.del}</button></div>
     ${help ? `<p class="muted small props-help">${help}</p>` : ''}`;
-  if (t.kind === 'point') {
+  if (t.kind === 'point' && !t.noRotate) {
     h += `<label>Rotation (°)<span class="field">
       <input type="range" data-k="rot" min="0" max="359" step="1" value="${Math.round(el.rot)}">
       <input type="number" data-k="rot" min="0" max="359" step="1" value="${Math.round(el.rot)}"></span></label>`;
   }
-  h += t.params.map((d) => paramHtml(d, el.p[d.k])).join('');
+  h += t.params.filter((d) => !d.when || d.when(el.p)).map((d) => paramHtml(d, el.p[d.k])).join('');
   if (t.legs) h += legsHtml(el);
   if (t.lanes) h += lanesHtml(el);
   h += linksHtml(el);
@@ -795,6 +814,8 @@ function wireProps(el) {
       else el.p[k] = v;
       props.querySelectorAll(`[data-k="${k}"]`).forEach((o) => { if (o !== input && o.type !== 'checkbox') o.value = input.value; });
       liveUpdate(el);
+      // show or hide the fields that depend on this one
+      if (t.params.some((x) => x.when) && (input.type === 'checkbox' || input.tagName === 'SELECT')) renderProps();
     };
     input.addEventListener(input.type === 'checkbox' || input.tagName === 'SELECT' ? 'change' : 'input', handler);
   });
@@ -1068,9 +1089,14 @@ async function loadBackdrop(file) {
   };
   ui.adjustBackdrop = true;
   overlay.classList.add('adjusting');
+  ui.selectedId = null;
   setTool('select');
   render(); save(); renderImagery(); updateHint();
-  toast('Screenshot added at the current map scale. Drag to line it up, or use Calibrate scale.');
+  // bring its controls into view
+  const sec = document.querySelector('details[data-sec="imagery"]');
+  sec.open = true;
+  sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  toast('Screenshot added. Use Calibrate scale if its size looks off.');
 }
 
 document.addEventListener('paste', (e) => {
