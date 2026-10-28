@@ -1,7 +1,7 @@
 // Elements drawn by clicking several points: road segments, patches,
 // dimensions and vehicle turning paths. They draw in screen pixels.
 import {
-  n, samplePath, normals, offsetPts, frameAt, pathD, polygonArea, llToMeters,
+  n, samplePath, normals, offsetPts, frameAt, nearestOnSamples, pathD, polygonArea, llToMeters, offsetLL,
   vecBearing, bearingVec, polylineLength,
 } from '../geo.js';
 import { COLORS as C } from './common.js';
@@ -73,16 +73,124 @@ function lineSvg(pts, color, width, dash) {
   return `<path d="${pathD(pts)}" fill="none" stroke="${color}" stroke-width="${n(width)}"${dash ? ` stroke-dasharray="${dash}"` : ''}/>`;
 }
 
+// Indexes of the lane boundaries at the left and right curbs (null if there's no roadway).
+function roadEdges(lanes) {
+  const on = lanes.map((l, i) => (LANE_TYPES[l.type].off ? -1 : i)).filter((i) => i >= 0);
+  return on.length ? [on[0], on[on.length - 1] + 1] : [null, null];
+}
+
+/**
+ * Screen geometry of a road: centerline samples (sm), and lane boundaries along them. `ext`
+ * carries the boundaries straight on past either end by some pixels (xs are those samples).
+ */
+export function roadGeom(el, ctx, ext = {}) {
+  if (el.pts.length < 2) return null;
+  const px = el.pts.map((p) => ctx.toPx(p[0], p[1]));
+  const sm = samplePath(px, { smooth: el.p.smooth, step: 4, startDir: ctx.dirs.start, endDir: ctx.dirs.end });
+  if (sm.length < 2) return null;
+  const total = sm[sm.length - 1].s;
+  const xs = sm.slice();
+  const reach = (a, b, d, s0) => {
+    const L = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    return { x: a.x + ((a.x - b.x) / L) * d, y: a.y + ((a.y - b.y) / L) * d, s: s0 };
+  };
+  if (ext.start > 0) xs.unshift(reach(sm[0], sm[1], ext.start, -ext.start));
+  if (ext.end > 0) xs.push(reach(sm[sm.length - 1], sm[sm.length - 2], ext.end, total + ext.end));
+  const norms = normals(xs);
+  const layouts = xs.map((p) => laneLayout(el.p.lanes, Math.max(0, Math.min(1, p.s / total))));
+  const boundary = (k) => offsetPts(xs, norms, layouts.map((lay) => lay.bounds[k] * ctx.s));
+  return { sm, total, xs, norms, layouts, boundary };
+}
+
+const cross2 = (a, b) => a[0] * b[1] - a[1] * b[0];
+const dot2 = (a, b) => a[0] * b[0] + a[1] * b[1];
+
+/**
+ * Where a road end meets the side of another road: the end point, which way is "into" the
+ * other road (t), this road's right-hand normal (nrm), and the other road's curb direction (c).
+ * The road keeps its own angle; lane boundaries run on until they hit that curb line.
+ */
+function sideJoint(sm, total, end, c) {
+  const f = frameAt(sm, end === 'start' ? 0 : total);
+  const t = end === 'start' ? [-f.tx, -f.ty] : [f.tx, f.ty];
+  let den = cross2(t, c);
+  if (Math.abs(den) < 0.25) den = den < 0 ? -0.25 : 0.25; // nearly parallel: limit the overrun
+  const nrm = [f.nx, f.ny];
+  // how far past the end a boundary at sideways offset o (px) runs before it meets the curb line
+  const run = (o) => (-o * cross2(nrm, c)) / den;
+  return { P: [f.x, f.y], t, nrm, c, run };
+}
+
+/**
+ * Where a screen point falls on a road: fraction along it, sideways offset in meters
+ * (+ = right of the arrow), the lane under it, and whether it's past either end.
+ */
+export function roadHit(el, ctx, p) {
+  const g = roadGeom(el, ctx);
+  if (!g) return null;
+  const { sm, total } = g;
+  const near = nearestOnSamples(sm, p);
+  const f = frameAt(sm, near.s);
+  const along = (p[0] - f.x) * f.tx + (p[1] - f.y) * f.ty;
+  const lateral = ((p[0] - f.x) * f.nx + (p[1] - f.y) * f.ny) / ctx.s;
+  const frac = near.s / total;
+  const lay = laneLayout(el.p.lanes, frac);
+  let lane = -1;
+  for (let k = 0; k < el.p.lanes.length; k++) if (lateral >= lay.bounds[k] && lateral < lay.bounds[k + 1]) lane = k;
+  const pastEnd = (near.s <= 0 && along < -1) || (near.s >= total && along > 1);
+  return { frac, lateral, lane, layout: lay, pastEnd };
+}
+
+/** Outline of one lane, for highlighting it on the map. */
+export function laneOutline(el, ctx, i) {
+  const g = roadGeom(el, ctx);
+  if (!g || i < 0 || i >= el.p.lanes.length) return '';
+  return pathD(g.boundary(i).concat(g.boundary(i + 1).reverse()), true);
+}
+
+/**
+ * A connection point on a road's curb, `frac` of the way along it, on the left (side -1)
+ * or right (side 1). Its bearing points away from the road, like the other ports.
+ */
+export function sidePort(el, frac, side, dirs = {}) {
+  if (el.pts.length < 2) return null;
+  const [lat0, lng0] = el.pts[0];
+  const m = el.pts.map((p) => llToMeters(lat0, lng0, p[0], p[1]));
+  const sm = samplePath(m, { smooth: el.p.smooth, step: 1, startDir: dirs.start, endDir: dirs.end });
+  if (sm.length < 2) return null;
+  const f = frameAt(sm, frac * sm[sm.length - 1].s);
+  const off = side * roadWidth(el.p.lanes, frac) / 2;
+  const x = f.x + f.nx * off, y = f.y + f.ny * off;
+  // tangent: the curb's direction there, as a screen-space unit vector
+  return { ll: offsetLL(lat0, lng0, x, -y), bearing: vecBearing(f.nx * side, f.ny * side), tangent: [f.tx, f.ty] };
+}
+
+/**
+ * The lanes another road has at one of its ends, turned to suit a road joining there.
+ * `myEnd` is which end of the joining road sits on that port.
+ */
+export function lanesAtJoint(other, otherEnd, myEnd) {
+  const { ws } = laneLayout(other.p.lanes, otherEnd === 'end' ? 1 : 0);
+  const lanes = other.p.lanes.map((l, i) => ({ ...l, w: ws[i], w2: null }));
+  if ((otherEnd === 'end') !== (myEnd === 'start')) {
+    lanes.reverse();
+    lanes.forEach((l) => { if (l.dir) l.dir = l.dir === 'fwd' ? 'back' : 'fwd'; });
+  }
+  return lanes;
+}
+
 const segment = {
   kind: 'path', label: 'Road segment', group: 'Streets', key: 's', minPts: 2,
-  hint: 'Click along the street centerline; double-click or Enter to finish. Start or end on an orange dot to connect.',
-  help: 'Drag an end onto an orange dot to connect it. Drag the small dots to add bends. The arrow shows which way is "forward" for the lane list.',
+  hint: 'Click along the street centerline; double-click or Enter to finish. Start or end on an orange dot to continue a road, or on the side of a road to make a T. Shift snaps angles.',
+  help: 'Drag the + beyond an end to extend the road. Drop an end on an orange dot to continue another road, or on its side to make a T. Click a lane on the map or in the strip below to edit it. Ctrl+drag the road to add a bend. Split a road (X) to change lanes for part of it.',
   params: [
     { k: 'smooth', label: 'Smooth curves', type: 'bool', def: true },
+    { k: 'centerline', label: 'Yellow centerline between opposing lanes', type: 'bool', def: true },
     { k: 'xwStart', label: 'Crosswalk at start', type: 'bool', def: false },
     { k: 'xwEnd', label: 'Crosswalk at end', type: 'bool', def: false },
     { k: 'xwWidth', label: 'Crosswalk width', type: 'len', def: F(10), min: 1.8, max: 6, when: (p) => p.xwStart || p.xwEnd },
     { k: 'xwSetback', label: 'Crosswalk setback from end', type: 'len', def: F(4), min: 0, max: 15, when: (p) => p.xwStart || p.xwEnd },
+    { k: 'cornerR', label: 'Corner radius where it meets the other road', type: 'len', def: F(15), min: 0, max: 20, when: (p) => p.links?.start?.key === 'side' || p.links?.end?.key === 'side' },
   ],
   lanes: true,
   defaults: () => ({ lanes: structuredClone(PRESETS['Two-lane with bike lanes']), links: {} }),
@@ -91,7 +199,9 @@ const segment = {
   ports(el) {
     const pts = el.pts;
     if (pts.length < 2) return [];
-    const out = (a, b) => { const [x, y] = llToMeters(b[0], b[1], a[0], a[1]); return vecBearing(x, y); };
+    // Like roundabout legs, a port's bearing points away from its own road, so a road
+    // connected to it carries straight on.
+    const out = (end, inner) => { const [x, y] = llToMeters(inner[0], inner[1], end[0], end[1]); return vecBearing(x, y); };
     return [
       { key: 'start', ll: pts[0], bearing: out(pts[0], pts[1]), width: roadWidth(el.p.lanes, 0) },
       { key: 'end', ll: pts[pts.length - 1], bearing: out(pts[pts.length - 1], pts[pts.length - 2]), width: roadWidth(el.p.lanes, 1) },
@@ -101,14 +211,20 @@ const segment = {
   draw(el, ctx) {
     const { s } = ctx;
     const lanes = el.p.lanes;
-    if (!lanes.length || el.pts.length < 2) return '';
-    const px = el.pts.map((p) => ctx.toPx(p[0], p[1]));
-    const sm = samplePath(px, { smooth: el.p.smooth, step: 4, startDir: ctx.dirs.start, endDir: ctx.dirs.end });
-    if (sm.length < 2) return '';
-    const total = sm[sm.length - 1].s;
-    const norms = normals(sm);
-    const layouts = sm.map((p) => laneLayout(lanes, p.s / total));
-    const boundary = (k) => offsetPts(sm, norms, layouts.map((lay) => lay.bounds[k] * s));
+    const base = lanes.length ? roadGeom(el, ctx) : null;
+    if (!base) return '';
+    // Ends that meet the side of another road run on to its curb line and are trimmed there.
+    const joints = {};
+    const ext = {};
+    for (const end of ['start', 'end']) {
+      const side = ctx.dirs[`${end}Side`];
+      if (!side?.c) continue;
+      joints[end] = sideJoint(base.sm, base.total, end, side.c);
+      const { bounds } = laneLayout(lanes, end === 'start' ? 0 : 1);
+      ext[end] = Math.max(0, ...bounds.map((b) => joints[end].run(b * s))) + 2;
+    }
+    const g = joints.start || joints.end ? roadGeom(el, ctx, ext) : base;
+    const { sm, total, xs, norms, layouts, boundary } = g;
     const B = lanes.map((_, k) => boundary(k)).concat([boundary(lanes.length)]);
     const at = (dist, off) => { const f = frameAt(sm, dist); return [f.x + f.nx * off, f.y + f.ny * off]; };
     const layoutAt = (dist) => laneLayout(lanes, Math.max(0, Math.min(1, dist / total)));
@@ -118,7 +234,8 @@ const segment = {
       const T = LANE_TYPES[lane.type];
       if (Math.max(lane.w, lane.w2 ?? lane.w) < 0.05) return;
       const poly = B[i].concat(B[i + 1].slice().reverse());
-      fills += `<path d="${pathD(poly, true)}" fill="${T.fill}"/>`;
+      // a hairline of the same color overlaps neighbors so joints between roads don't show a seam
+      fills += `<path d="${pathD(poly, true)}" fill="${T.fill}" stroke="${T.fill}" stroke-width="1" stroke-linejoin="round"/>`;
       if (T.hatch) {
         // diagonal buffer hatching every 3 m
         for (let d = 1.5 * s; d < total - 1.5 * s; d += 3 * s) {
@@ -137,6 +254,55 @@ const segment = {
       }
     });
 
+    // Where this road meets the side of another road, round the corners into it.
+    const edges = roadEdges(lanes);
+    const Rset = Math.max(0, el.p.cornerR ?? F(15)) * s;
+    const trims = []; // [boundary index, corner point K, direction back along the road, length to drop]
+    let cornerFill = '', cornerCurbs = '', mouthFill = '', clipDefs = '', clipOpen = '', clipClose = '';
+    for (const end of ['start', 'end']) {
+      const J = joints[end];
+      if (!J || edges[0] === null) continue;
+      const { bounds } = laneLayout(lanes, end === 'start' ? 0 : 1);
+      const u = [-J.t[0], -J.t[1]]; // back along this road
+      const mouth = [];
+      for (const [k, sign] of [[edges[0], -1], [edges[1], 1]]) {
+        const o = bounds[k] * s, lam = J.run(o);
+        const K = [J.P[0] + J.nrm[0] * o + J.t[0] * lam, J.P[1] + J.nrm[1] * o + J.t[1] * lam];
+        // along the other road's curb, away from the opening on this side
+        const w = dot2(J.c, J.nrm) * sign >= 0 ? J.c : [-J.c[0], -J.c[1]];
+        const half = Math.acos(Math.max(-1, Math.min(1, dot2(u, w)))) / 2;
+        // keep sharp corners from sending the curve far down either road
+        const R = Math.min(Rset, Math.tan(half) * Math.min(total / 2, 4 * Rset));
+        if (R < 0.5 || half < 0.05) { mouth.push(K); continue; }
+        const tl = R / Math.tan(half);
+        const T1 = [K[0] + u[0] * tl, K[1] + u[1] * tl], T2 = [K[0] + w[0] * tl, K[1] + w[1] * tl];
+        const bis = [u[0] + w[0], u[1] + w[1]], bl = Math.hypot(bis[0], bis[1]) || 1;
+        const C0 = [K[0] + (bis[0] / bl) * (R / Math.sin(half)), K[1] + (bis[1] / bl) * (R / Math.sin(half))];
+        const sweep = cross2([T1[0] - C0[0], T1[1] - C0[1]], [T2[0] - C0[0], T2[1] - C0[1]]) > 0 ? 1 : 0;
+        const arc = `M ${n(T1[0])} ${n(T1[1])} A ${n(R)} ${n(R)} 0 0 ${sweep} ${n(T2[0])} ${n(T2[1])}`;
+        cornerFill += `<path d="${arc} L ${n(K[0])} ${n(K[1])} Z" fill="${C.asphalt}" stroke="${C.asphalt}" stroke-width="1.5" stroke-linejoin="round"/>`;
+        cornerCurbs += `<path d="${arc}" fill="none" stroke="${C.curb}" stroke-width="${n(0.3 * s)}"/>`;
+        trims.push([k, K, u, tl]);
+        mouth.push(T2);
+      }
+      // pave over the other road's curb across the opening
+      const m = cross2(J.c, J.t) > 0 ? [-J.c[1], J.c[0]] : [J.c[1], -J.c[0]]; // into the other road
+      const e = 0.25 * s, [m0, m1] = mouth;
+      mouthFill += `<path d="${pathD([m0, m1, [m1[0] + m[0] * e, m1[1] + m[1] * e], [m0[0] + m[0] * e, m0[1] + m[1] * e]], true)}" fill="${C.asphalt}" stroke="${C.asphalt}" stroke-width="1.5" stroke-linejoin="round"/>`;
+      // keep only this road's side of the other road's curb line
+      const big = 1e5, c = J.c;
+      const id = `clip-${String(el.id).replace(/[^\w-]/g, '')}-${end}`;
+      const q = (a, b) => `${n(J.P[0] + c[0] * a + u[0] * b)} ${n(J.P[1] + c[1] * a + u[1] * b)}`;
+      clipDefs += `<clipPath id="${id}"><path d="M ${q(-big, 0)} L ${q(big, 0)} L ${q(big, big)} L ${q(-big, big)} Z"/></clipPath>`;
+      clipOpen += `<g clip-path="url(#${id})">`;
+      clipClose += '</g>';
+    }
+    const trim = (k, pts) => {
+      const cut = trims.filter((tr) => tr[0] === k);
+      if (!cut.length) return pts;
+      return pts.filter((p) => cut.every(([, K, u, tl]) => (p[0] - K[0]) * u[0] + (p[1] - K[1]) * u[1] > tl));
+    };
+
     // Lines between lanes, plus curbs on the outer roadway edges.
     const dash = `${n(3 * s)} ${n(9 * s)}`;
     for (let k = 0; k <= lanes.length; k++) {
@@ -145,15 +311,18 @@ const segment = {
       if (!a) style = LANE_TYPES[b.type].off ? 'none' : 'curb';
       else if (!b) style = LANE_TYPES[a.type].off ? 'none' : 'curb';
       else style = separator(a, b);
+      if (style === 'yellowDouble' && el.p.centerline === false) style = 'none';
       const pts = B[k];
-      const shifted = (m) => offsetPts(sm, norms, layouts.map((lay) => (lay.bounds[k] + m) * s));
-      if (style === 'curb') curbs += lineSvg(pts, C.curb, 0.3 * s);
+      const shifted = (m) => offsetPts(xs, norms, layouts.map((lay) => (lay.bounds[k] + m) * s));
+      if (style === 'curb') curbs += lineSvg(trim(k, pts), C.curb, 0.3 * s);
       else if (style === 'white') marks += lineSvg(pts, C.paint, 0.15 * s);
       else if (style === 'whiteDash') marks += lineSvg(pts, C.paint, 0.15 * s, dash);
       else if (style === 'yellowDouble') marks += lineSvg(shifted(-0.15), C.yellow, 0.12 * s) + lineSvg(shifted(0.15), C.yellow, 0.12 * s);
       else if (style === 'centerLeft') marks += lineSvg(shifted(-0.15), C.yellow, 0.12 * s) + lineSvg(shifted(0.15), C.yellow, 0.12 * s, dash);
       else if (style === 'centerRight') marks += lineSvg(shifted(-0.15), C.yellow, 0.12 * s, dash) + lineSvg(shifted(0.15), C.yellow, 0.12 * s);
     }
+    fills += cornerFill;
+    curbs += cornerCurbs;
 
     // Crosswalks at the ends, across the roadway, with gaps at raised medians.
     const crosswalkAt = (d) => {
@@ -186,7 +355,8 @@ const segment = {
     if (el.p.xwEnd && total > off * 2) marks += crosswalkAt(total - off);
 
     const hit = `<path d="${pathD(sm.map((p) => [p.x, p.y]))}" fill="none" stroke="#000" stroke-opacity="0.001" stroke-width="16" data-hit="1"/>`;
-    return `<g id="Lanes">${fills}</g><g id="Markings">${marks}</g><g id="Curbs">${curbs}</g>${hit}`;
+    const body = `<g id="Lanes">${fills}</g><g id="Markings">${marks}</g><g id="Curbs">${curbs}</g>`;
+    return `${clipDefs ? `<defs>${clipDefs}</defs>` : ''}${clipOpen}${body}${clipClose}${mouthFill}${hit}`;
   },
 
   warnings(el, f) {
@@ -234,7 +404,7 @@ const segment = {
 };
 
 /** Cross-section diagram of a road segment at fraction t (0 = start, 1 = end). */
-const SHORT = {
+export const LANE_SHORT = {
   sidewalk: 'Sidewalk', planting: 'Planting', parking: 'Parking', bike: 'Bike', buffer: 'Buffer', posts: 'Posts',
   separator: 'Curb', travel: 'Travel', turn: 'Turn', center: 'Center turn', bus: 'Bus', median: 'Median',
 };
@@ -270,7 +440,7 @@ export function crossSectionSvg(lanes, t, f, { pxPerM = 22, title = '' } = {}) {
       const cx = x + bw / 2, cy = top + 51, d = l.dir === 'fwd' ? -1 : 1;
       bars += `<path d="M ${n(cx - 3)} ${n(cy - d * 2)} L ${n(cx)} ${n(cy + d * 3)} L ${n(cx + 3)} ${n(cy - d * 2)}" fill="none" stroke="#fff" stroke-width="1.3"/>`;
     }
-    names.push({ cx: x + bw / 2, text: SHORT[l.type] || T.label });
+    names.push({ cx: x + bw / 2, text: LANE_SHORT[l.type] || T.label });
     widths.push({ cx: x + bw / 2, text: f(w) });
     x += bw;
   }

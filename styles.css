@@ -168,19 +168,71 @@ main { flex: 1; display: flex; min-height: 0; }
 .legrow strong { grid-column: 1 / -1; font-size: 12px; }
 .legrow label { margin: 0 !important; }
 .legrow input[type=number] { width: 100%; }
-.lanerow { padding: 6px; margin-bottom: 4px; background: #2d3035; border-radius: 6px; }
-.lanetop { display: flex; gap: 4px; align-items: center; }
-.lanetop select { flex: 1; min-width: 0; padding: 3px 4px; font-size: 12.5px; }
-.lanetop button { padding: 2px 6px; font-size: 12px; min-width: 24px; }
-.lanetop button.dir { min-width: 64px; }
-.lanetop .gap { width: 4px; }
-.lanew { margin-top: 5px; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 4px; padding-left: 14px; }
-.lanew input { width: 46px; padding: 2px 4px; font-size: 12px; }
-.lanew .sep { margin: 0 4px; opacity: .5; }
+.lanes-head { display: flex; align-items: center; gap: 4px; margin: 4px 0 6px; }
+.lanes-head h3 { flex: 1; margin: 0 !important; }
+.lanes-head button { padding: 2px 8px; font-size: 12px; }
+.lanetotal { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.lanetotal strong { color: var(--text); font-weight: 600; }
+.lanecaption { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); margin-bottom: 3px; }
+.lanestrip {
+  position: relative; display: flex; height: 84px; padding: 3px; gap: 0;
+  background: #17191b; border-radius: 6px; touch-action: none; user-select: none;
+}
+.lanestrip.resizing, .lanestrip.resizing * { cursor: col-resize !important; }
+.lb {
+  position: relative; flex: 1 1 0; min-width: 14px; padding: 4px 0 3px; border: 0; border-radius: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: space-between; gap: 2px;
+  font-size: 10.5px; line-height: 1; cursor: grab; overflow: visible;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.35);
+}
+.lb:first-child { border-radius: 4px 0 0 4px; }
+.lb:last-child { border-radius: 0 4px 4px 0; }
+.lb:hover { filter: brightness(1.12); }
+.lb.sel { box-shadow: inset 0 0 0 2px var(--accent), 0 0 0 1px var(--accent); z-index: 1; }
+.lb:focus-visible { outline: 2px solid #fff; outline-offset: -3px; z-index: 2; }
+.lb.zero { opacity: .55; background-image: repeating-linear-gradient(45deg, transparent 0 3px, rgba(0,0,0,.35) 3px 5px) !important; }
+.lb.dragging { opacity: .85; z-index: 3; cursor: grabbing; box-shadow: 0 4px 14px rgba(0,0,0,.6); }
+.lb .ll { writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; overflow: hidden; flex: 1; min-height: 0; font-weight: 500; }
+.lb .la { font-size: 12px; font-weight: 700; }
+.lb .lw { font-size: 10px; opacity: .9; white-space: nowrap; }
+.lb .grip { position: absolute; top: 0; bottom: 0; right: -5px; width: 10px; z-index: 4; cursor: col-resize; }
+.lb .grip::after { content: ''; position: absolute; top: 30%; bottom: 30%; left: 4px; width: 2px; border-radius: 1px; background: rgba(255,255,255,.0); }
+.lb .grip:hover::after, .lanestrip.resizing .grip::after { background: #fff; }
+.lanemark { position: absolute; top: -2px; bottom: -2px; width: 4px; border-radius: 2px; background: var(--accent); pointer-events: none; z-index: 5; }
+.striphelp { margin: 5px 0 8px; }
+.lanehint { margin: 0 0 8px; }
+.lanecard { padding: 8px; margin-bottom: 8px; background: #2d3035; border-radius: 6px; border: 1px solid var(--accent); }
+.lanecard-top { display: flex; gap: 4px; align-items: center; }
+.lanecard-top select { flex: 1; min-width: 0; padding: 3px 4px; font-size: 12.5px; }
+.lanecard-top button { padding: 3px 6px; font-size: 11px; min-width: 24px; line-height: 1; }
+.lanecard-top button svg { width: 14px; height: 14px; }
+.lanecard-row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-top: 8px; }
+#panel label.lanenum { margin: 0; font-size: 11.5px; color: var(--muted); gap: 2px; }
+.lanenum span { color: var(--text); font-size: 12px; white-space: nowrap; }
+.lanenum input { width: 56px; padding: 3px 5px; font-size: 12.5px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; padding: 4px 8px; font-size: 12px; background: #33373c; color: var(--muted); }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on { background: #243447; color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.seg.wide { display: flex; margin-bottom: 6px; }
+.seg.wide button { flex: 1; }
+.lane-add select { flex: 1; min-width: 0; font-size: 12.5px; padding: 4px 6px; }
+.xsd { margin: 4px 0 6px; font-size: 12.5px; }
+.xsd summary { cursor: pointer; color: var(--muted); margin-bottom: 6px; }
+.xsd summary:hover { color: var(--text); }
 .swatch { width: 10px; height: 22px; border-radius: 2px; flex: none; border: 1px solid #000; }
+.linkfix { font-size: 12px; color: var(--warn); display: flex; gap: 6px; align-items: center; margin: -2px 0 8px; }
+.linkfix button { padding: 2px 6px; font-size: 12px; white-space: nowrap; }
 #xs svg { display: block; max-width: 100%; height: auto; margin-bottom: 6px; border-radius: 4px; }
 .linkrow { font-size: 12px; display: flex; gap: 6px; align-items: center; justify-content: space-between; margin-bottom: 4px; }
 .linkrow button { padding: 2px 6px; font-size: 12px; }
+.linkrow { padding: 3px 4px; border-radius: 4px; }
+.linkrow:hover { background: #2d3035; }
+.linkbtns { display: flex; gap: 4px; flex: none; }
+.linksub { margin: 8px 0 2px; }
+.linkfix { padding: 6px 8px; border: 1px solid var(--warn); border-radius: 6px; flex-direction: column; align-items: stretch !important; margin: 2px 0 8px !important; }
+.linkfix button { align-self: flex-start; }
+.lanes-head button.on { border-color: var(--accent); background: #243447; }
 
 .warn { border: 1px solid var(--warn); border-radius: 6px; padding: 8px; margin: 10px 0; font-size: 12.5px; color: var(--text); }
 .warn strong { color: var(--warn); }
@@ -213,3 +265,4 @@ table.qty .total td { border-top: 1px solid var(--line); font-weight: 600; paddi
 .small { font-size: 12px; }
 kbd { background: #33373c; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font-size: 11px; }
 button.danger:hover { border-color: #e0574f; }
+#overlay.splitting #els g[data-id] * { cursor: crosshair; }

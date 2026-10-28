@@ -1,11 +1,17 @@
-// Road Drafter: draft street redesigns on aerial imagery and export them to Figma as SVG.
-import { M2FT, ppmAt, n, offsetLL, llToMeters, localToLL, bearingVec, vecBearing, dist, pathD } from './geo.js';
+// Left Of Way: draft street redesigns on aerial imagery and export them to Figma as SVG.
+import {
+  M2FT, ppmAt, n, offsetLL, llToMeters, localToLL, bearingVec, vecBearing, dist, pathD, samplePath, nearestOnSamples, frameAt,
+  distToSegment,
+} from './geo.js';
 import { TYPES, GROUPS, ICONS, migrateElement, newParams } from './types/index.js';
 import { makeLegs } from './types/points.js';
-import { LANE_TYPES, PRESETS, roadWidth, crossSectionSvg } from './types/paths.js';
+import {
+  LANE_TYPES, LANE_SHORT, PRESETS, roadWidth, laneLayout, crossSectionSvg, roadHit, laneOutline, sidePort, lanesAtJoint,
+} from './types/paths.js';
 import { SOURCES, createImagery } from './imagery.js';
 import { setupSearch } from './search.js';
 
+// Storage keys keep the app's old name so existing saved work still loads.
 const STORE_KEY = 'road-drafter-v2';
 const OLD_STORE_KEY = 'road-drafter-v1';
 const SNAP_PX = 22;
@@ -20,6 +26,7 @@ const ACT_ICONS = {
   front: icon('<rect x="8" y="8" width="12" height="12" rx="1" fill="currentColor" fill-opacity=".35"/><path d="M4 16V4h12"/>'),
   back: icon('<rect x="4" y="4" width="12" height="12" rx="1" fill="currentColor" fill-opacity=".35"/><path d="M20 8v12H8"/>'),
   del: icon('<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>'),
+  split: icon('<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4L8.1 15.9M14.5 14.5L20 20M8.1 8.1L12 12"/>'),
 };
 
 // ---------- project state ----------
@@ -68,6 +75,8 @@ const ui = {
   tool: 'select', selectedId: null, draft: null, cursor: null, drag: null,
   hidden: false, opacity: 1, compare: false, swipe: 0.5,
   adjustBackdrop: false, calibrate: null, lastLanes: null, cursorPx: null, hoverId: null,
+  splitting: false, splitHover: null, extend: null, snap: null, laneSel: null, laneHover: null,
+  laneEnd: 0, taperEdit: false, laneClip: null, mirror: true, ctrlHeld: false,
 };
 const undoStack = [], redoStack = [];
 const linkDirs = new Map(); // element id -> {start, end} forced road directions at connected ends
@@ -96,6 +105,7 @@ function restore(from, to) {
   $('toast').hidden = true;
   if (!from.length) return;
   to.push(JSON.stringify(els()));
+  if (ui.extend) endExtendMode();
   project.variants[project.current].elements = JSON.parse(from.pop());
   if (!getEl(ui.selectedId)) ui.selectedId = null;
   refresh();
@@ -133,7 +143,7 @@ const imagery = createImagery(map, (state) => {
   }
   // only mention loading if it's slow
   statusTimer = setTimeout(() => { el.textContent = 'Loading aerial photo…'; el.hidden = false; }, 600);
-});
+}, () => project.variants.flatMap((v) => v.elements.flatMap((e) => (e.pts ? e.pts : [[e.lat, e.lng]]))));
 let imageryNote = imagery.apply(project.imagery);
 L.control.scale({ position: 'bottomleft' }).addTo(map);
 
@@ -166,6 +176,54 @@ function nearestPort(px, excludeId) {
   return best;
 }
 
+// The port a link points at: a fixed port, or a spot on the side of a road.
+function portFor(target, link) {
+  if (!target) return null;
+  if (link.key === 'side') {
+    if (target.type !== 'segment') return null;
+    const sp = sidePort(target, link.s, link.side, linkDirs.get(target.id) || {});
+    return sp && { id: target.id, key: 'side', s: link.s, side: link.side, ...sp };
+  }
+  return portsOf(target).find((p) => p.key === link.key) || null;
+}
+const linkOf = (port) => (port.key === 'side' ? { id: port.id, key: 'side', s: port.s, side: port.side } : { id: port.id, key: port.key });
+
+// A spot on the side of a road near px (on its curb, sidewalk or roadway), to start a T there.
+function nearestSide(px, excludeId) {
+  let best = null, bestD = Infinity;
+  for (const el of els()) {
+    if (el.type !== 'segment' || el.id === excludeId || el.pts.length < 2) continue;
+    const ctx = ctxFor(el);
+    const hit = roadHit(el, ctx, px);
+    if (!hit || hit.pastEnd || hit.frac < 0.01 || hit.frac > 0.99) continue;
+    const b = hit.layout.bounds, slack = SNAP_PX / ctx.s;
+    if (hit.lateral < b[0] - slack || hit.lateral > b[b.length - 1] + slack) continue;
+    const side = hit.lateral >= 0 ? 1 : -1;
+    const d = Math.abs(Math.abs(hit.lateral) - hit.layout.road / 2);
+    if (d < bestD) {
+      const port = portFor(el, { key: 'side', s: hit.frac, side });
+      if (port) { best = port; bestD = d; }
+    }
+  }
+  return best;
+}
+
+// What a road end at px would connect to: another road's end (or a leg) first, else a road's side.
+const snapTarget = (px, excludeId) => nearestPort(px, excludeId) || nearestSide(px, excludeId);
+
+// Roads that meet the side of another road draw on top of it so their corners show.
+function orderSideRoads() {
+  const list = els();
+  for (const el of [...list]) {
+    for (const end of ['start', 'end']) {
+      const l = el.p.links?.[end];
+      if (l?.key !== 'side') continue;
+      const i = list.indexOf(el), j = list.findIndex((o) => o.id === l.id);
+      if (j > i) { list.splice(i, 1); list.splice(j, 0, el); }
+    }
+  }
+}
+
 // Keep connected road ends glued to their ports; roundabout legs take the road's width.
 function resolveLinks() {
   linkDirs.clear();
@@ -177,10 +235,12 @@ function resolveLinks() {
         const link = el.p.links[end];
         if (!link) continue;
         const target = getEl(link.id);
-        const port = target && portsOf(target).find((p) => p.key === link.key);
-        if (!port) { delete el.p.links[end]; continue; }
+        const port = portFor(target, link);
+        if (!port) { if (pass) delete el.p.links[end]; continue; }
         const idx = end === 'start' ? 0 : el.pts.length - 1;
         el.pts[idx] = [port.ll[0], port.ll[1]];
+        // a road meeting another's side keeps its own angle and is trimmed along that curb
+        if (link.key === 'side') { dirs[`${end}Side`] = { c: port.tangent }; continue; }
         const v = bearingVec(port.bearing);
         dirs[end] = end === 'start' ? v : [-v[0], -v[1]];
         if (TYPES[target.type].legs && link.key.startsWith('leg')) {
@@ -235,7 +295,7 @@ function backdropMarkup(interactive) {
 
 function selectionMarkup() {
   const el = getEl(ui.selectedId);
-  if (!el) return '';
+  if (!el || ui.extend) return '';
   const t = TYPES[el.type];
   const s = ppm(elLat(el));
   if (t.kind === 'point') {
@@ -258,7 +318,7 @@ function selectionMarkup() {
   }
   const px = el.pts.map((p) => toPx(p[0], p[1]));
   let out = `<path d="${pathD(px, t.closed)}" fill="none" stroke="#2f9bff" stroke-width="1.5" stroke-dasharray="6 4"/>`;
-  if (!t.maxPts) {
+  if (!t.maxPts && ui.ctrlHeld) {
     const segs = px.length - (t.closed ? 0 : 1);
     for (let i = 0; i < segs; i++) {
       const a = px[i], b = px[(i + 1) % px.length];
@@ -277,8 +337,144 @@ function selectionMarkup() {
     const a = px[i], b = px[i + 1];
     const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2, ang = (Math.atan2(b[1] - a[1], b[0] - a[0]) * 180) / Math.PI;
     out += `<g transform="translate(${n(mx)} ${n(my)}) rotate(${n(ang)})"><path d="M -8 -8 L 6 0 L -8 8" fill="none" stroke="#2f9bff" stroke-width="3"/></g>`;
+    // warn on ends whose lanes don't line up with the road they continue
+    for (const end of ['start', 'end']) {
+      if (!jointMismatch(el, end)) continue;
+      const [x, y] = end === 'start' ? px[0] : px[px.length - 1];
+      out += `<g transform="translate(${n(x + 14)} ${n(y - 14)})"><circle r="10" fill="#f0b429" stroke="#1d1f22" stroke-width="2"/>
+        <text y="4.5" text-anchor="middle" font-size="13" font-weight="700" font-family="system-ui, sans-serif" fill="#1d1f22">!</text>
+        <title>Lanes don't line up with the connected road at the ${end}</title></g>`;
+    }
+    // "+" handles past each free end: click to keep drawing, drag to add a point
+    for (const end of ['start', 'end']) {
+      if (el.p.links?.[end]) continue;
+      const [a, b] = end === 'end' ? [px[px.length - 1], px[px.length - 2]] : [px[0], px[1]];
+      const L = Math.hypot(a[0] - b[0], a[1] - b[1]) || 1;
+      const hx = a[0] + ((a[0] - b[0]) / L) * 30, hy = a[1] + ((a[1] - b[1]) / L) * 30;
+      // with Ctrl held the + starts a new connected road instead (orange, with a joint mark)
+      const col = ui.ctrlHeld ? '#ff9f1c' : '#2f9bff';
+      out += `<line x1="${n(a[0])}" y1="${n(a[1])}" x2="${n(hx)}" y2="${n(hy)}" stroke="${col}" stroke-width="1.5" stroke-dasharray="3 3"/>
+        <g class="handle ext" data-ext="${end}" transform="translate(${n(hx)} ${n(hy)})"><circle r="9" fill="${col}" stroke="#fff" stroke-width="2"/>
+        <path d="M -4 0 H 4 M 0 -4 V 4" stroke="#fff" stroke-width="2"/>
+        <title>${ui.ctrlHeld ? 'New road: click to draw a new road from this end, or drag one out' : 'Extend: click to keep drawing from this end, or drag to add a point. Hold Ctrl (⌘) to start a new road here instead.'}</title></g>`;
+    }
   }
+  return laneHighlight(el) + out;
+}
+
+// Outline the lane picked in the lane editor (solid) or hovered there (dashed).
+function laneHighlight(el) {
+  if (el.type !== 'segment') return '';
+  const ctx = ctxFor(el);
+  let out = '';
+  const sel = ui.laneSel?.id === el.id ? ui.laneSel.i : null;
+  if (sel !== null) out += `<path d="${laneOutline(el, ctx, sel)}" fill="#2f9bff" fill-opacity="0.18" stroke="#2f9bff" stroke-width="2"/>`;
+  if (ui.laneHover !== null && ui.laneHover !== sel) out += `<path d="${laneOutline(el, ctx, ui.laneHover)}" fill="none" stroke="#fff" stroke-width="1.5" stroke-dasharray="4 3"/>`;
   return out;
+}
+
+// ---------- drawing aids ----------
+// The last fixed point of the road being drawn or extended, and the direction it's heading.
+function drawAnchor() {
+  if (ui.extend) {
+    const el = getEl(ui.extend.id);
+    if (!el) return null;
+    const px = el.pts.map((p) => toPx(p[0], p[1]));
+    const [a, b] = ui.extend.end === 'end' ? [px[px.length - 1], px[px.length - 2]] : [px[0], px[1]];
+    return { px: a, ref: [a[0] - b[0], a[1] - b[1]] };
+  }
+  const d = ui.draft;
+  if (!d?.pts.length) return null;
+  const px = d.pts.map((p) => toPx(p[0], p[1]));
+  const a = px[px.length - 1];
+  if (px.length > 1) { const b = px[px.length - 2]; return { px: a, ref: [a[0] - b[0], a[1] - b[1]] }; }
+  const port = d.links.start && portFor(getEl(d.links.start.id), d.links.start);
+  return { px: a, ref: port ? bearingVec(port.bearing) : [1, 0] };
+}
+
+// Where the next point goes: snapped to a road end or side, or (Shift) to 15° steps.
+function aimAt(px, shift) {
+  const roads = ui.extend || ui.tool === 'segment';
+  const snap = roads ? snapTarget(px, ui.extend?.id ?? null) : null;
+  if (snap) return { ll: [snap.ll[0], snap.ll[1]], snap };
+  const a = shift && drawAnchor();
+  if (a) {
+    const v = [px[0] - a.px[0], px[1] - a.px[1]], len = Math.hypot(v[0], v[1]);
+    const base = Math.atan2(a.ref[1], a.ref[0]), step = Math.PI / 12;
+    const ang = base + Math.round((Math.atan2(v[1], v[0]) - base) / step) * step;
+    return { ll: fromPx(a.px[0] + Math.cos(ang) * len, a.px[1] + Math.sin(ang) * len), snap: null };
+  }
+  return { ll: fromPx(px[0], px[1]), snap: null };
+}
+
+// Length of the piece being drawn, next to the cursor.
+function lengthMarkup() {
+  const a = (ui.draft || ui.extend) && ui.cursor && drawAnchor();
+  if (!a) return '';
+  const ll = fromPx(a.px[0], a.px[1]);
+  const len = map.distance(ll, ui.cursor);
+  if (len < 0.5) return '';
+  const [x, y] = toPx(ui.cursor[0], ui.cursor[1]);
+  const text = fmt(len), w = text.length * 7 + 12;
+  return `<g transform="translate(${n(x + 14)} ${n(y - 30)})" font-size="12" font-family="system-ui, sans-serif">
+    <rect width="${w}" height="20" rx="10" fill="rgba(20,22,25,.85)"/><text x="${w / 2}" y="14" text-anchor="middle" fill="#fff">${text}</text></g>`;
+}
+
+// ---------- extending a road from one end ----------
+// A new road starting at one end of `el`, with the same lanes and options, carrying on from it.
+function newConnectedRoad(el, end, morePts) {
+  const p = { ...newParams('segment'), smooth: el.p.smooth, centerline: el.p.centerline };
+  p.lanes = lanesAtJoint(el, end, 'start');
+  p.links = { start: { id: el.id, key: end } };
+  const from = end === 'end' ? el.pts[el.pts.length - 1] : el.pts[0];
+  return { id: uid(), type: 'segment', pts: [[from[0], from[1]], ...morePts], p };
+}
+
+// Ctrl+click on a road's +: start drawing a new road from that end.
+function startBranch(el, end) {
+  setTool('segment');
+  const road = newConnectedRoad(el, end, []);
+  ui.draft = { type: 'segment', pts: road.pts, links: road.p.links, p: road.p };
+  render();
+}
+function startExtend(el, end) {
+  checkpoint();
+  ui.extend = { id: el.id, end, added: 0 };
+  map.doubleClickZoom.disable();
+  overlay.classList.add('placing');
+  updateHint();
+  render();
+}
+function endExtendMode() {
+  ui.extend = null;
+  ui.snap = null;
+  map.doubleClickZoom.enable();
+  overlay.classList.remove('placing');
+  updateHint();
+}
+function finishExtend() {
+  const x = ui.extend;
+  if (!x) return;
+  endExtendMode();
+  if (!x.added) undoStack.pop();
+  refresh();
+}
+function extendClick(aim) {
+  const el = getEl(ui.extend.id);
+  if (!el) { finishExtend(); return; }
+  const end = ui.extend.end;
+  const last = end === 'end' ? el.pts[el.pts.length - 1] : el.pts[0];
+  if (dist(toPx(last[0], last[1]), toPx(aim.ll[0], aim.ll[1])) < 4) return; // double-click repeat
+  if (end === 'end') el.pts.push(aim.ll); else el.pts.unshift(aim.ll);
+  ui.extend.added++;
+  if (aim.snap) {
+    el.p.links = el.p.links || {};
+    el.p.links[end] = linkOf(aim.snap);
+    finishExtend();
+    return;
+  }
+  render();
+  save();
 }
 
 // Outline the element under the pointer in the item list.
@@ -297,12 +493,12 @@ function hoverMarkup() {
 }
 
 function portsMarkup() {
-  const showing = ui.tool === 'segment' || (ui.drag?.mode === 'vertex' && ui.drag.el.type === 'segment');
+  const showing = ui.tool === 'segment' || ui.extend || (ui.drag?.mode === 'vertex' && ui.drag.el.type === 'segment');
   if (!showing) return '';
   const skip = ui.drag?.el?.id;
   let out = '';
   // ring the dot the next click (or drop) would connect to
-  const near = ui.drag?.mode === 'vertex' ? ui.drag.port : ui.cursorPx && nearestPort(ui.cursorPx, null);
+  const near = ui.drag?.mode === 'vertex' ? ui.drag.port : ui.snap;
   if (near) {
     const [x, y] = toPx(near.ll[0], near.ll[1]);
     out += `<circle class="port" cx="${n(x)}" cy="${n(y)}" r="13" fill="none" stroke="#fff" stroke-width="2.5"/>`;
@@ -337,9 +533,14 @@ function draftMarkup() {
     const temp = { id: 'draft', type: d.type, pts, p: { ...d.p, links: {} } };
     let dirs = {};
     if (d.links.start) {
-      const target = getEl(d.links.start.id);
-      const port = target && portsOf(target).find((p) => p.key === d.links.start.key);
-      if (port) dirs = { start: bearingVec(port.bearing) };
+      const port = portFor(getEl(d.links.start.id), d.links.start);
+      if (port?.key === 'side') dirs = { startSide: { c: port.tangent } };
+      else if (port) dirs = { start: bearingVec(port.bearing) };
+    }
+    // preview the end meeting whatever the cursor snapped to
+    if (ui.snap && ui.cursor && d.pts.length) {
+      if (ui.snap.key === 'side') dirs = { ...dirs, endSide: { c: ui.snap.tangent } };
+      else { const v = bearingVec(ui.snap.bearing); dirs = { ...dirs, end: [-v[0], -v[1]] }; }
     }
     if (pts.length >= t.minPts || d.type === 'segment') out += `<g opacity="0.75">${markup(temp, { interactive: false, dirs })}</g>`;
     else out += `<path d="${pathD(pts.map((p) => toPx(p[0], p[1])))}" fill="none" stroke="#fff" stroke-width="2" stroke-dasharray="5 4"/>`;
@@ -369,18 +570,23 @@ function render() {
   resolveLinks();
   const W = overlay.clientWidth, H = overlay.clientHeight;
   bdLayer.innerHTML = backdropMarkup(true);
+  // while extending a road, show it reaching to the cursor
+  const ext = ui.extend && ui.cursor && getEl(ui.extend.id);
+  if (ext) { if (ui.extend.end === 'end') ext.pts.push(ui.cursor); else ext.pts.unshift(ui.cursor); }
   elsLayer.innerHTML = els().map((el) => markup(el)).join('');
+  if (ext) { if (ui.extend.end === 'end') ext.pts.pop(); else ext.pts.shift(); }
   elsLayer.style.opacity = ui.hidden ? 0 : ui.opacity;
   if (ui.compare) {
     $('swipeRect').setAttribute('width', ui.swipe * W);
     elsLayer.setAttribute('clip-path', 'url(#swipeClip)');
   } else elsLayer.removeAttribute('clip-path');
-  draftLayer.innerHTML = draftMarkup();
-  selLayer.innerHTML = hoverMarkup() + selectionMarkup() + portsMarkup() + compareMarkup(W, H);
+  draftLayer.innerHTML = draftMarkup() + lengthMarkup();
+  selLayer.innerHTML = hoverMarkup() + selectionMarkup() + portsMarkup() + splitMarkup() + compareMarkup(W, H);
 }
 
 let qtyTimer = null;
 function refresh() {
+  orderSideRoads();
   render();
   renderProps();
   updateWelcome();
@@ -431,6 +637,10 @@ function updateHint() {
     hint.textContent = ui.calibrate.pts.length ? 'Click the second point' : 'Click the first of two points a known distance apart on the screenshot';
   } else if (ui.adjustBackdrop) {
     hint.textContent = 'Drag the screenshot to line it up with the aerial photo. Press Esc when done.';
+  } else if (ui.extend) {
+    hint.textContent = 'Click to add points. Click an orange dot or the side of a road to connect. Shift snaps angles. Enter or double-click to finish.';
+  } else if (ui.splitting) {
+    hint.textContent = 'Click a road where you want to cut it. Each piece then gets its own lanes. Esc when done.';
   } else if (ui.tool === 'select') {
     hint.textContent = '';
   } else {
@@ -456,6 +666,8 @@ function buildToolbar() {
 
 function setTool(name) {
   if (ui.draft && ui.draft.type !== name) ui.draft = null;
+  if (ui.splitting) setSplitting(false);
+  if (ui.extend) finishExtend();
   ui.calibrate = null;
   ui.tool = name;
   $('tools').querySelectorAll('button').forEach((b) => {
@@ -488,19 +700,22 @@ function draftParams(type) {
   return p;
 }
 
-function addDraftPoint(ll, px) {
+function addDraftPoint(pt, snapped) {
   const t = TYPES[ui.tool];
   if (!ui.draft) ui.draft = { type: ui.tool, pts: [], links: {}, p: draftParams(ui.tool) };
   const d = ui.draft;
-  let pt = ll, snapped = null;
-  if (d.type === 'segment') {
-    const port = nearestPort(px, null);
-    if (port) { pt = port.ll; snapped = port; }
-  }
   const last = d.pts[d.pts.length - 1];
   if (last && dist(toPx(last[0], last[1]), toPx(pt[0], pt[1])) < 4) return; // double-click repeat
   d.pts.push([pt[0], pt[1]]);
-  if (snapped) d.links[d.pts.length === 1 ? 'start' : 'end'] = { id: snapped.id, key: snapped.key };
+  if (snapped) {
+    const end = d.pts.length === 1 ? 'start' : 'end';
+    d.links[end] = linkOf(snapped);
+    // continuing another road: take its lanes so the two line up
+    const other = getEl(snapped.id);
+    if (other?.type === 'segment' && snapped.key !== 'side' && (end === 'start' || !d.links.start)) {
+      d.p.lanes = lanesAtJoint(other, snapped.key, end);
+    }
+  }
   if ((snapped && d.pts.length > 1) || (t.maxPts && d.pts.length >= t.maxPts)) finishDraft();
   else render();
 }
@@ -527,26 +742,29 @@ map.on('click', (e) => {
   const ll = [e.latlng.lat, e.latlng.lng];
   const px = [e.containerPoint.x, e.containerPoint.y];
   if (ui.calibrate) { calibrateClick(ll); return; }
+  if (ui.extend) { extendClick(aimAt(px, e.originalEvent.shiftKey)); return; }
   if (ui.tool === 'select') {
     if (ui.selectedId) { ui.selectedId = null; render(); renderProps(); }
     return;
   }
   if (TYPES[ui.tool].kind === 'point') addPointElement(ui.tool, ll);
-  else addDraftPoint(ll, px);
+  else { const aim = aimAt(px, e.originalEvent.shiftKey); addDraftPoint(aim.ll, aim.snap); }
 });
-map.on('dblclick', () => { if (ui.draft) finishDraft(); });
+map.on('dblclick', () => { if (ui.draft) finishDraft(); if (ui.extend) finishExtend(); });
 map.on('mousemove', (e) => {
-  if (ui.tool === 'select' && !ui.draft) return;
+  if (ui.tool === 'select' && !ui.draft && !ui.extend) return;
   ui.cursorPx = [e.containerPoint.x, e.containerPoint.y];
   ui.cursor = [e.latlng.lat, e.latlng.lng];
-  // preview the road snapping to the dot it would connect to
-  if (ui.tool === 'segment') {
-    const port = nearestPort(ui.cursorPx, null);
-    if (port) ui.cursor = [port.ll[0], port.ll[1]];
+  ui.snap = null;
+  // preview snapping to a road end or side, or to the Shift angle steps
+  if (ui.extend || TYPES[ui.tool]?.kind === 'path') {
+    const aim = aimAt(ui.cursorPx, e.originalEvent.shiftKey);
+    ui.cursor = aim.ll;
+    ui.snap = aim.snap;
   }
   render();
 });
-map.on('mouseout', () => { ui.cursor = null; ui.cursorPx = null; render(); });
+map.on('mouseout', () => { ui.cursor = null; ui.cursorPx = null; ui.snap = null; render(); });
 
 // ---------- dragging ----------
 const localPoint = (e) => { const r = overlay.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
@@ -556,6 +774,11 @@ overlay.addEventListener('pointerdown', (e) => {
   const tgt = e.target;
   const start = localPoint(e);
   if (tgt.closest('[data-swipe]')) { e.preventDefault(); ui.drag = { mode: 'swipe' }; return; }
+  if (ui.splitting) {
+    const hit = getEl(tgt.closest('[data-id]')?.dataset.id);
+    if (hit?.type === 'segment') { e.preventDefault(); splitRoad(hit, start); }
+    return;
+  }
   if (tgt.closest('[data-bd]') && ui.adjustBackdrop) {
     e.preventDefault();
     ui.drag = { mode: 'backdrop', start, origin: toPx(project.backdrop.lat, project.backdrop.lng) };
@@ -563,6 +786,8 @@ overlay.addEventListener('pointerdown', (e) => {
   }
   const el = getEl(ui.selectedId);
   const vtx = tgt.closest('[data-vtx]'), mid = tgt.closest('[data-mid]'), leg = tgt.closest('[data-leg]'), rot = tgt.closest('.rot');
+  const ext = tgt.closest('[data-ext]');
+  if (el && ext) { e.preventDefault(); ui.drag = { mode: 'ext', el, end: ext.dataset.ext, start, branch: e.ctrlKey || e.metaKey }; return; }
   if (el && (vtx || mid || leg || rot)) {
     e.preventDefault();
     checkpoint();
@@ -585,11 +810,28 @@ overlay.addEventListener('pointerdown', (e) => {
   const g = tgt.closest('[data-id]');
   if (!g) return;
   e.preventDefault();
+  const was = ui.selectedId === g.dataset.id;
   ui.selectedId = g.dataset.id;
   const sel = getEl(ui.selectedId);
+  // Ctrl (⌘) + drag on a line adds a bend point there
+  if ((e.ctrlKey || e.metaKey) && sel.pts && !TYPES[sel.type].maxPts) {
+    checkpoint();
+    const px = sel.pts.map((q) => toPx(q[0], q[1]));
+    const closed = TYPES[sel.type].closed;
+    let best = 0, bestD = Infinity;
+    for (let i = 0; i < px.length - (closed ? 0 : 1); i++) {
+      const d = distToSegment(start, px[i], px[(i + 1) % px.length]);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    sel.pts.splice(best + 1, 0, fromPx(start[0], start[1]));
+    ui.drag = { mode: 'vertex', el: sel, i: best + 1, inserted: true, moved: false };
+    renderProps();
+    render();
+    return;
+  }
   checkpoint();
   ui.drag = {
-    mode: 'move', el: sel, start, moved: false,
+    mode: 'move', el: sel, start, moved: false, was,
     origin: sel.pts ? sel.pts.map((p) => toPx(p[0], p[1])) : toPx(sel.lat, sel.lng),
   };
   renderProps();
@@ -604,9 +846,34 @@ overlay.addEventListener('wheel', (e) => {
 
 window.addEventListener('pointermove', (e) => {
   const d = ui.drag;
+  if (ui.splitting && !d) {
+    const hit = getEl(e.target.closest?.('[data-id]')?.dataset.id);
+    const next = hit?.type === 'segment' ? { id: hit.id, px: localPoint(e) } : null;
+    if (next || ui.splitHover) { ui.splitHover = next; render(); }
+    return;
+  }
   if (!d) return;
   const p = localPoint(e);
-  d.moved = true;
+  if (d.mode === 'ext') {
+    if (dist(p, d.start) < 5) return;
+    checkpoint();
+    const ll = fromPx(p[0], p[1]);
+    if (d.branch) {
+      // Ctrl: drag out a new road connected to this end, and drag its far end
+      const road = newConnectedRoad(d.el, d.end, [ll]);
+      els().push(road);
+      ui.selectedId = road.id;
+      ui.drag = { mode: 'vertex', el: road, i: 1, inserted: true };
+      renderProps();
+    } else {
+      // dragging the + adds a new end point and drags it
+      if (d.end === 'end') d.el.pts.push(ll); else d.el.pts.unshift(ll);
+      ui.drag = { mode: 'vertex', el: d.el, i: d.end === 'end' ? d.el.pts.length - 1 : 0, inserted: true };
+    }
+  }
+  const dd = ui.drag;
+  dd.moved = true;
+  if (dd !== d) { render(); return; }
   if (d.mode === 'swipe') {
     ui.swipe = clamp(p[0] / overlay.clientWidth, 0.02, 0.98);
   } else if (d.mode === 'backdrop') {
@@ -641,10 +908,10 @@ window.addEventListener('pointermove', (e) => {
     let ll = fromPx(p[0], p[1]);
     if (d.el.type === 'segment' && (d.i === 0 || d.i === d.el.pts.length - 1)) {
       const end = d.i === 0 ? 'start' : 'end';
-      const port = nearestPort(p, d.el.id);
+      const port = snapTarget(p, d.el.id);
       d.el.p.links = d.el.p.links || {};
       d.port = port;
-      if (port) { ll = port.ll; d.el.p.links[end] = { id: port.id, key: port.key }; } else delete d.el.p.links[end];
+      if (port) { ll = port.ll; d.el.p.links[end] = linkOf(port); } else delete d.el.p.links[end];
     }
     d.el.pts[d.i] = [ll[0], ll[1]];
   }
@@ -655,8 +922,17 @@ window.addEventListener('pointerup', () => {
   const d = ui.drag;
   if (!d) return;
   ui.drag = null;
+  if (d.mode === 'ext') {
+    if (d.branch) startBranch(d.el, d.end); else startExtend(d.el, d.end);
+    return;
+  }
   const undoable = ['move', 'rotate', 'leg', 'vertex'].includes(d.mode);
   if (undoable && !d.moved && !d.inserted) undoStack.pop();
+  // a second click on a selected road picks the lane under the pointer
+  if (d.mode === 'move' && !d.moved && d.was && d.el.type === 'segment') {
+    const hit = roadHit(d.el, ctxFor(d.el), d.start);
+    if (hit && hit.lane >= 0) ui.laneSel = laneSelIn(d.el) === hit.lane ? null : { id: d.el.id, i: hit.lane };
+  }
   if (d.mode === 'backdrop' || d.mode === 'swipe') { render(); save(); renderImagery(); return; }
   refresh();
 });
@@ -670,6 +946,190 @@ function deleteVertex(el, i) {
   }
   refresh();
 }
+
+// ---------- splitting roads ----------
+// Cut a road in two so each piece can have its own lanes, e.g. to open a median at an intersection.
+
+function setSplitting(on) {
+  ui.splitting = on;
+  ui.splitHover = null;
+  if (on) {
+    if (ui.tool !== 'select') setTool('select');
+    ui.draft = null;
+    ui.selectedId = null;
+    renderProps();
+  }
+  overlay.classList.toggle('splitting', on);
+  updateHint();
+  render();
+}
+
+// Where a road would be cut for a pointer at px (screen pixels), or null if too near an end.
+function splitTarget(el, px) {
+  const pts = el.pts.map((p) => toPx(p[0], p[1]));
+  const dirs = linkDirs.get(el.id) || {};
+  const sm = samplePath(pts, { smooth: el.p.smooth, step: 2, startDir: dirs.start, endDir: dirs.end });
+  if (sm.length < 2) return null;
+  const total = sm[sm.length - 1].s, at = nearestOnSamples(sm, px).s;
+  const minGap = Math.max(6, 1.5 * ppm(elLat(el)));
+  if (at < minGap || total - at < minGap) return null;
+  return { pts, sm, at, total, f: frameAt(sm, at) };
+}
+
+function splitMarkup() {
+  const h = ui.splitting && ui.splitHover;
+  const el = h && getEl(h.id);
+  const hit = el && splitTarget(el, h.px);
+  if (!hit) return '';
+  const { at, total, f } = hit;
+  const { nx, ny } = f;
+  const { bounds } = laneLayout(el.p.lanes, at / total);
+  const s = ppm(elLat(el)), l = bounds[0] * s - 8, r = bounds[bounds.length - 1] * s + 8;
+  const c = f;
+  const line = `M ${n(c.x + nx * l)} ${n(c.y + ny * l)} L ${n(c.x + nx * r)} ${n(c.y + ny * r)}`;
+  return `<path d="${line}" stroke="#fff" stroke-width="5" stroke-linecap="round"/>
+    <path d="${line}" stroke="#ff9f1c" stroke-width="2.5" stroke-dasharray="6 4"/>`;
+}
+
+function splitRoad(el, px) {
+  const hit = splitTarget(el, px);
+  if (!hit) { toast('Too close to the end of the road to split there.'); return; }
+  const { pts, sm, at, total, f } = hit;
+  checkpoint();
+  // Distance along the road of each original point (the curve passes through them, in order).
+  let k = 0;
+  const along = pts.map((p) => {
+    let best = Infinity, bestK = k;
+    for (let j = k; j < sm.length; j++) {
+      const d = Math.hypot(sm[j].x - p[0], sm[j].y - p[1]);
+      if (d < best) { best = d; bestK = j; }
+    }
+    k = bestK;
+    return sm[bestK].s;
+  });
+  const sampleLL = (d) => { const q = frameAt(sm, d); return fromPx(q.x, q.y); };
+  const cut = fromPx(f.x, f.y);
+  const inner = el.pts.slice(1, -1), innerAlong = along.slice(1, -1);
+  let ptsA = [el.pts[0], ...inner.filter((_, j) => innerAlong[j] < at - 1), cut];
+  let ptsB = [cut, ...inner.filter((_, j) => innerAlong[j] > at + 1), el.pts[el.pts.length - 1]];
+  // A two-point piece would draw straight, so give it a point from the middle of the curve.
+  if (ptsA.length === 2 && el.p.smooth) ptsA = [ptsA[0], sampleLL(at / 2), ptsA[1]];
+  if (ptsB.length === 2 && el.p.smooth) ptsB = [ptsB[0], sampleLL((at + total) / 2), ptsB[1]];
+
+  const t = at / total;
+  const widthAt = (l) => Math.max(0, l.w + ((l.w2 ?? l.w) - l.w) * t);
+  const b = structuredClone(el);
+  b.id = uid();
+  b.pts = ptsB;
+  b.p.lanes = el.p.lanes.map((l) => (l.w2 === null ? { ...l } : { ...l, w: widthAt(l) }));
+  b.p.xwStart = false;
+  b.p.links = { start: { id: el.id, key: 'end' } };
+  if (el.p.links?.end) b.p.links.end = el.p.links.end;
+
+  el.pts = ptsA;
+  el.p.lanes = el.p.lanes.map((l) => (l.w2 === null ? l : { ...l, w2: widthAt(l) }));
+  el.p.xwEnd = false;
+  if (el.p.links) delete el.p.links.end;
+
+  // Roads that were attached to the old far end now attach to the new piece.
+  for (const o of els()) {
+    if (o.type !== 'segment' || !o.p.links) continue;
+    for (const end of ['start', 'end']) {
+      const l = o.p.links[end];
+      if (l?.id !== el.id) continue;
+      if (l.key === 'end') o.p.links[end] = { id: b.id, key: 'end' };
+      // roads meeting the side keep their spot, on whichever piece it's now on
+      if (l.key === 'side') o.p.links[end] = l.s * total < at ? { ...l, s: (l.s * total) / at } : { ...l, id: b.id, s: (l.s * total - at) / (total - at) };
+    }
+  }
+  els().splice(els().indexOf(el) + 1, 0, b);
+  ui.splitHover = null;
+  refresh();
+  toast('Road split in two. Click either piece after Esc to change its lanes.', { undoable: true });
+}
+
+// ---------- smoothing a road's curve ----------
+// Average the drawn curve over a stretch about 1.5 road-widths long, then keep only as many
+// points as it takes to follow that within ~35 cm. Each press smooths a little more.
+function rdp(pts, tol) {
+  const keep = new Uint8Array(pts.length);
+  keep[0] = keep[pts.length - 1] = 1;
+  const stack = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop();
+    let best = -1, bi = -1;
+    for (let i = a + 1; i < b; i++) {
+      const d = distToSegment(pts[i], pts[a], pts[b]);
+      if (d > best) { best = d; bi = i; }
+    }
+    if (best > tol) { keep[bi] = 1; stack.push([a, bi], [bi, b]); }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
+
+function smoothRoad(el) {
+  const [lat0, lng0] = el.pts[0];
+  const m = el.pts.map((p) => llToMeters(lat0, lng0, p[0], p[1]));
+  const dirs = linkDirs.get(el.id) || {};
+  const sm = samplePath(m, { smooth: true, step: 1, startDir: dirs.start, endDir: dirs.end }).map((p) => [p.x, p.y]);
+  if (sm.length < 5) return;
+  const r = clamp(Math.round(roadWidth(el.p.lanes, 0) * 0.75), 3, 30);
+  // Mirror the curve through each endpoint so the average can run right to the ends:
+  // the endpoints stay put and the road keeps its heading there.
+  const N = sm.length, A = sm[0], Z = sm[N - 1];
+  const at = (j) => (j < 0 ? [2 * A[0] - sm[-j][0], 2 * A[1] - sm[-j][1]]
+    : j >= N ? [2 * Z[0] - sm[2 * N - 2 - j][0], 2 * Z[1] - sm[2 * N - 2 - j][1]] : sm[j]);
+  const k = Math.min(r, Math.floor((N - 1) / 2));
+  const avg = sm.map((_, i) => {
+    let x = 0, y = 0;
+    for (let j = i - k; j <= i + k; j++) { const q = at(j); x += q[0]; y += q[1]; }
+    return [x / (2 * k + 1), y / (2 * k + 1)];
+  });
+  // Few, evenly spread points: bunched points make the curve overshoot.
+  const gap = Math.max(6, roadWidth(el.p.lanes, 0));
+  const kept = rdp(avg, 0.35);
+  const pts = [kept[0]];
+  for (const q of kept.slice(1, -1)) {
+    if (dist(q, pts[pts.length - 1]) >= gap && dist(q, kept[kept.length - 1]) >= gap) pts.push(q);
+  }
+  pts.push(kept[kept.length - 1]);
+  // Keep the heading at free ends, so roads continuing from them don't swing round.
+  // (Connected ends already take their heading from what they connect to.)
+  const lead = Math.min(gap, (sm.length - 1) / 3); // samples are 1 m apart
+  for (const end of ['start', 'end']) {
+    if (el.p.links?.[end] || el.pts.length < 2 || lead < 1) continue;
+    const [e0, e1] = end === 'start' ? [m[0], m[1]] : [m[m.length - 1], m[m.length - 2]];
+    const L = dist(e0, e1) || 1;
+    const guide = [e0[0] + ((e1[0] - e0[0]) / L) * lead, e0[1] + ((e1[1] - e0[1]) / L) * lead];
+    const E = end === 'start' ? pts[0] : pts[pts.length - 1];
+    const inner = pts.slice(1, -1).filter((q) => dist(q, E) > lead * 1.5);
+    pts.splice(1, pts.length - 2, ...(end === 'start' ? [guide, ...inner] : [...inner, guide]));
+  }
+  // Note where side streets meet this road, to put them back at the same spot afterwards.
+  const attached = els().flatMap((o) => ['start', 'end'].map((e) => ({ o, e, l: o.p.links?.[e] })))
+    .filter(({ l }) => l?.id === el.id && l.key === 'side')
+    .map((a) => ({ ...a, ll: portFor(el, a.l)?.ll }))
+    .filter((a) => a.ll);
+  const before = el.pts.length;
+  checkpoint();
+  el.pts = pts.map(([x, y]) => offsetLL(lat0, lng0, x, -y));
+  if (attached.length) {
+    const m2 = el.pts.map((p) => llToMeters(lat0, lng0, p[0], p[1]));
+    const sm2 = samplePath(m2, { smooth: true, step: 1, startDir: dirs.start, endDir: dirs.end });
+    const len2 = sm2[sm2.length - 1].s || 1;
+    for (const { o, e, ll } of attached) {
+      const q = llToMeters(lat0, lng0, ll[0], ll[1]);
+      o.p.links[e] = { ...o.p.links[e], s: clamp(nearestOnSamples(sm2, q).s / len2, 0.01, 0.99) };
+    }
+  }
+  el.p.smooth = true;
+  refresh();
+  toast(`Smoothed the curve (${before} points → ${el.pts.length}).`, { undoable: true });
+}
+
+// True when a road is attached end-to-end with another road.
+const joinedToRoad = (el) => ['start', 'end'].some((e) => getEl(el.p.links?.[e]?.id)?.type === 'segment')
+  || els().some((o) => o.type === 'segment' && ['start', 'end'].some((e) => o.p.links?.[e]?.id === el.id));
 
 // ---------- properties panel ----------
 const props = $('props');
@@ -706,32 +1166,369 @@ function legsHtml(el) {
     ${rows}`;
 }
 
-function lanesHtml(el) {
-  const unit = unitLabel(), step = project.units === 'ft' ? 1 : 0.1;
-  const rows = el.p.lanes.map((lane, i) => {
-    const T = LANE_TYPES[lane.type];
-    return `<div class="lanerow" data-lane="${i}">
-      <div class="lanetop">
-        <span class="swatch" style="background:${T.fill}"></span>
-        <select data-lf="type" aria-label="Lane type">${Object.entries(LANE_TYPES).map(([k, t]) => `<option value="${k}" ${k === lane.type ? 'selected' : ''}>${t.label}</option>`).join('')}</select>
-        ${T.dir ? `<button class="dir" data-lact="dir" title="Direction of travel, relative to the blue arrow on the road. Click to flip.">${lane.dir === 'back' ? '↓ Toward' : '↑ Away'}</button>` : ''}
-        <span class="gap"></span>
-        <button data-lact="up" title="Move left" ${i === 0 ? 'disabled' : ''}>▲</button><button data-lact="down" title="Move right" ${i === el.p.lanes.length - 1 ? 'disabled' : ''}>▼</button><button data-lact="del" title="Remove lane">×</button>
-      </div>
-      <div class="lanew"><span>Width</span><input type="number" data-lf="w" step="${step}" min="0" value="${toDisp(lane.w)}" aria-label="Width"> ${unit}
-        <span class="sep">·</span><span title="Leave blank to keep the same width. Set it to taper the lane along the road.">Tapers to</span>
-        <input type="number" data-lf="w2" step="${step}" min="0" placeholder="–" value="${lane.w2 === null ? '' : toDisp(lane.w2)}" aria-label="Width at the end of the road"> ${unit}</div>
-    </div>`;
+// ---------- lane editor ----------
+// A cross-section strip: lanes drawn to scale, left to right facing the road's arrow.
+// Click a lane to edit it, drag it to reorder, drag the gap between two lanes to resize them.
+
+/** Whether the road has (or is being given) different widths at each end, and which end the editor shows. */
+function laneEditing(el) {
+  const tapered = el.p.lanes.some((l) => l.w2 !== null) || ui.taperEdit === el.id;
+  return { tapered, at: tapered ? ui.laneEnd : 0 };
+}
+const laneWidth = (l, at) => (at === 1 ? l.w2 ?? l.w : l.w);
+function setLaneWidth(el, l, v) {
+  const { tapered, at } = laneEditing(el);
+  v = clamp(v, 0, 30);
+  if (tapered && at === 1) l.w2 = v; else l.w = v;
+}
+const shortLen = (m) => (project.units === 'ft' ? `${Math.round(m * M2FT * 2) / 2}′` : `${+m.toFixed(1)}`);
+// Dark or light text, whichever reads on a lane color.
+function ink(hex) {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  return 0.299 * r + 0.587 * g + 0.114 * b > 0.6 ? '#1d1f22' : '#fff';
+}
+const laneSelIn = (el) => (ui.laneSel?.id === el.id && ui.laneSel.i < el.p.lanes.length ? ui.laneSel.i : null);
+
+// Mirror mode: when both sides of the road have the same lanes, edits to one side copy across.
+const symmetric = (L) => L.every((l, i) => l.type === L[L.length - 1 - i].type);
+const mirroring = (el) => ui.mirror && symmetric(el.p.lanes);
+/** The lane across the middle from lane i, or null (mirror off, or i is the middle lane). */
+function partner(el, i) {
+  if (!mirroring(el)) return null;
+  const j = el.p.lanes.length - 1 - i;
+  return j === i ? null : j;
+}
+const flipDir = (d) => (d === 'fwd' ? 'back' : d === 'back' ? 'fwd' : d);
+
+function laneStripHtml(el) {
+  const { at } = laneEditing(el);
+  const L = el.p.lanes, sel = laneSelIn(el);
+  return L.map((l, i) => {
+    const T = LANE_TYPES[l.type], w = laneWidth(l, at);
+    const arrow = T.dir ? (l.dir === 'back' ? '↓' : '↑') : '';
+    const dirText = arrow ? (l.dir === 'back' ? ', toward you' : ', away') : '';
+    return `<button class="lb${i === sel ? ' sel' : ''}${w < 0.05 ? ' zero' : ''}" data-i="${i}" style="flex-grow:${Math.max(w, 0.0001).toFixed(3)};background:${T.fill};color:${ink(T.fill)}"
+      title="${T.label}, ${fmt(w)}${dirText}" aria-label="${T.label}, ${fmt(w)}${dirText}" aria-pressed="${i === sel}">
+      ${arrow ? `<span class="la">${arrow}</span>` : ''}<span class="ll">${LANE_SHORT[l.type]}</span><span class="lw">${shortLen(w)}</span>
+      ${i < L.length - 1 ? `<span class="grip" data-grip="${i}" title="Drag to resize these two lanes (Shift: just this one)"></span>` : ''}</button>`;
   }).join('');
-  return `<h3>Lanes <span class="muted small">left to right, facing the arrow</span></h3>
-    <select data-preset><option value="">Apply a preset…</option>${Object.keys(PRESETS).map((k) => `<option>${esc(k)}</option>`).join('')}</select>
-    ${rows}
-    <div class="row"><button data-addlane>+ Add lane</button><button data-flip>Flip direction</button></div>
-    <p class="muted small">"Tapers to" sets a lane's width at the far end, e.g. a turn lane from 10 to 0 ft while a median grows from 0 to 10 ft.</p>
-    <h3>Cross-section</h3><div id="xs"></div>
-    ${el.p.lanes.some((l) => l.w2 !== null && l.w2 !== l.w)
+}
+
+function laneTotalsHtml(el) {
+  const { at } = laneEditing(el);
+  const L = el.p.lanes;
+  const road = roadWidth(L, at), all = L.reduce((sum, l) => sum + laneWidth(l, at), 0);
+  return `<span><strong>${fmt(road)}</strong> curb to curb</span><span>${fmt(all)} overall</span>`;
+}
+
+function laneCardHtml(el) {
+  const i = laneSelIn(el);
+  if (i === null) return '<p class="muted small lanehint">Click a lane in the strip or on the map to edit it.</p>';
+  const lane = el.p.lanes[i], T = LANE_TYPES[lane.type];
+  const { tapered } = laneEditing(el);
+  const unit = unitLabel(), step = project.units === 'ft' ? 0.5 : 0.1;
+  const num = (f, v, label, ph = '') => `<label class="lanenum">${label}<span><input type="number" data-lf="${f}" step="${step}" min="0" value="${v === null ? '' : toDisp(v)}" placeholder="${ph}"> ${unit}</span></label>`;
+  return `<div class="lanecard">
+    <div class="lanecard-top">
+      <span class="swatch" style="background:${T.fill}"></span>
+      <select data-lf="type" aria-label="Lane type">${Object.entries(LANE_TYPES).map(([k, t]) => `<option value="${k}" ${k === lane.type ? 'selected' : ''}>${t.label}</option>`).join('')}</select>
+      <button data-lact="left" title="Move left (Alt+←)" aria-label="Move left" ${i === 0 ? 'disabled' : ''}>◀</button>
+      <button data-lact="right" title="Move right (Alt+→)" aria-label="Move right" ${i === el.p.lanes.length - 1 ? 'disabled' : ''}>▶</button>
+      <button data-lact="dup" title="Duplicate lane" aria-label="Duplicate lane">${ACT_ICONS.dup}</button>
+      <button data-lact="del" class="danger" title="Remove lane (Del)" aria-label="Remove lane">${ACT_ICONS.del}</button>
+    </div>
+    <div class="lanecard-row">
+      ${tapered ? num('w', lane.w, 'Start') + num('w2', lane.w2, 'End', toDisp(lane.w)) : num('w', lane.w, 'Width')}
+      ${T.dir ? `<div class="seg" role="group" aria-label="Direction of travel">
+        <button data-dir="fwd" class="${lane.dir !== 'back' ? 'on' : ''}" title="Same way as the road's arrow">↑ Away</button>
+        <button data-dir="back" class="${lane.dir === 'back' ? 'on' : ''}" title="Against the road's arrow">↓ Toward</button></div>` : ''}
+    </div>
+  </div>`;
+}
+
+function lanesHtml(el) {
+  const { tapered, at } = laneEditing(el);
+  const tapers = el.p.lanes.some((l) => l.w2 !== null && l.w2 !== l.w);
+  const sym = symmetric(el.p.lanes);
+  return `<div class="lanes-head"><h3>Lanes</h3>
+      <button data-mirror class="${ui.mirror && sym ? 'on' : ''}" aria-pressed="${ui.mirror && sym}" ${sym ? '' : 'disabled'}
+        title="${sym ? 'Mirror: changes to one side of the road copy to the other side' : "Mirror needs the same lanes on both sides of the road"}">⇋ Mirror</button>
+      <button data-lanecopy title="Copy these lanes to paste on another road">Copy</button>
+      <button data-lanepaste title="Paste lanes copied from another road" ${ui.laneClip ? '' : 'disabled'}>Paste</button>
+      <button data-flip title="Reverse the road's direction (lanes stay where they are)">Flip</button></div>
+    <div class="lanetotal">${laneTotalsHtml(el)}</div>
+    ${tapered ? `<div class="seg wide" role="group" aria-label="Widths shown for"><button data-laneend="0" class="${at === 0 ? 'on' : ''}">Start of road</button><button data-laneend="1" class="${at === 1 ? 'on' : ''}">End of road</button></div>` : ''}
+    <div class="lanecaption"><span>◀ Left</span><span>facing the arrow</span><span>Right ▶</span></div>
+    <div class="lanestrip" role="group" aria-label="Lanes, left to right. Arrow keys pick a lane, Alt+arrows move it, Delete removes it.">${laneStripHtml(el)}</div>
+    <p class="muted small striphelp">Drag a lane to reorder. Drag the line between two lanes to resize them (Shift: just one).</p>
+    <div id="lanecard">${laneCardHtml(el)}</div>
+    <div class="row lane-add">
+      <select data-addlane aria-label="Add a lane"><option value="">+ Add lane…</option>${Object.entries(LANE_TYPES).map(([k, t]) => `<option value="${k}">${t.label}</option>`).join('')}</select>
+      <select data-preset aria-label="Apply a preset"><option value="">Presets…</option>${Object.keys(PRESETS).map((k) => `<option>${esc(k)}</option>`).join('')}</select>
+    </div>
+    <label class="check"><input type="checkbox" data-taper ${tapered ? 'checked' : ''}> Different widths at each end (taper)</label>
+    <details class="xsd"><summary>Cross-section drawing</summary><div id="xs"></div>
+    ${tapers
       ? '<div class="row"><button data-xsdl="0">Download start (SVG)</button><button data-xsdl="1">Download end (SVG)</button></div>'
-      : '<div class="row"><button data-xsdl="0">Download cross-section (SVG)</button></div>'}`;
+      : '<div class="row"><button data-xsdl="0">Download (SVG)</button></div>'}</details>`;
+}
+
+// Pick a lane (null to clear) and update the panel and map.
+function selectLane(el, i, focus = false) {
+  ui.laneSel = i === null ? null : { id: el.id, i };
+  const strip = props.querySelector('.lanestrip');
+  if (strip) strip.innerHTML = laneStripHtml(el);
+  const card = $('lanecard');
+  if (card) { card.innerHTML = laneCardHtml(el); wireLaneCard(el); }
+  if (focus && i !== null) props.querySelector(`.lb[data-i="${i}"]`)?.focus();
+  render();
+}
+
+// Redraw the strip and totals after a width change, without rebuilding the panel.
+function updateLaneStrip(el) {
+  const strip = props.querySelector('.lanestrip');
+  if (strip) strip.innerHTML = laneStripHtml(el);
+  const tot = props.querySelector('.lanetotal');
+  if (tot) tot.innerHTML = laneTotalsHtml(el);
+  liveUpdate(el);
+}
+
+// Change the lane list, then rebuild the panel keeping the chosen lane (and focus) in view.
+function editLanes(el, fn, { focusLane = false } = {}) {
+  checkpoint();
+  const next = fn(el.p.lanes);
+  ui.lastLanes = structuredClone(el.p.lanes);
+  if (next !== undefined) ui.laneSel = next === null ? null : { id: el.id, i: next };
+  refresh();
+  if (focusLane && ui.laneSel) props.querySelector(`.lb[data-i="${ui.laneSel.i}"]`)?.focus();
+}
+
+function wireLaneCard(el) {
+  const card = $('lanecard');
+  const i = laneSelIn(el);
+  if (!card || i === null) return;
+  const lane = el.p.lanes[i];
+  card.querySelectorAll('input, select').forEach((input) => {
+    input.addEventListener('focus', checkpoint, { once: true });
+  });
+  card.querySelector('[data-lf="type"]').addEventListener('change', (e) => {
+    const T = LANE_TYPES[e.target.value];
+    // On a road joined to another, keep the width so the pieces still line up.
+    const keep = joinedToRoad(el);
+    const j = partner(el, i);
+    Object.assign(lane, { type: e.target.value, w: keep ? lane.w : T.def, w2: keep ? lane.w2 : null, dir: T.dir ? lane.dir || 'fwd' : null });
+    if (j !== null) Object.assign(el.p.lanes[j], { type: lane.type, w: lane.w, w2: lane.w2, dir: flipDir(lane.dir) });
+    ui.lastLanes = structuredClone(el.p.lanes);
+    refresh();
+  });
+  card.querySelectorAll('input[data-lf]').forEach((input) => input.addEventListener('input', () => {
+    const f = input.dataset.lf;
+    if (f === 'w2' && input.value.trim() === '') lane.w2 = null;
+    else {
+      const v = parseFloat(input.value);
+      if (Number.isNaN(v)) return;
+      lane[f] = clamp(fromDisp(v), 0, 30);
+    }
+    const j = partner(el, i);
+    if (j !== null) el.p.lanes[j][f] = lane[f];
+    ui.lastLanes = structuredClone(el.p.lanes);
+    updateLaneStrip(el);
+  }));
+  card.querySelectorAll('[data-dir]').forEach((b) => b.addEventListener('click', () => {
+    const j = partner(el, i);
+    editLanes(el, (L) => { lane.dir = b.dataset.dir; if (j !== null) L[j].dir = flipDir(lane.dir); });
+  }));
+  card.querySelectorAll('[data-lact]').forEach((b) => b.addEventListener('click', () => {
+    const a = b.dataset.lact;
+    const p = partner(el, i);
+    editLanes(el, (L) => {
+      if (a === 'del') {
+        [i, p].filter((k) => k !== null).sort((x, y) => y - x).forEach((k) => L.splice(k, 1));
+        return L.length ? Math.min(p !== null && p < i ? i - 1 : i, L.length - 1) : null;
+      }
+      if (a === 'dup') {
+        if (p === null) { L.splice(i + 1, 0, structuredClone(lane)); return i + 1; }
+        const twin = { ...structuredClone(lane), dir: flipDir(lane.dir) };
+        if (i < p) { L.splice(p, 0, twin); L.splice(i + 1, 0, structuredClone(lane)); return i + 1; }
+        L.splice(i + 1, 0, structuredClone(lane)); L.splice(p, 0, twin); return i + 2;
+      }
+      const j = a === 'left' ? i - 1 : i + 1;
+      [L[i], L[j]] = [L[j], L[i]];
+      // the twin moves the opposite way, unless the two swaps would undo each other
+      if (p !== null) {
+        const q = a === 'left' ? p + 1 : p - 1;
+        if (q >= 0 && q < L.length && ![i, j].includes(p) && ![i, j].includes(q)) [L[p], L[q]] = [L[q], L[p]];
+      }
+      return j;
+    });
+  }));
+}
+
+function wireLanes(el) {
+  const strip = props.querySelector('.lanestrip');
+  if (!strip) return;
+  wireLaneCard(el);
+
+  strip.addEventListener('pointerdown', (e) => {
+    const block = e.target.closest('.lb');
+    if (!block || e.button !== 0) return;
+    e.preventDefault();
+    const i = +block.dataset.i, grip = e.target.closest('[data-grip]');
+    const x0 = e.clientX;
+    strip.setPointerCapture(e.pointerId);
+    const L = el.p.lanes;
+    let onMove, onUp;
+    if (grip) {
+      // resize: trade width with the right-hand neighbor so the overall width stays put
+      const { at } = laneEditing(el);
+      const a = L[i];
+      const wa0 = laneWidth(a, at);
+      const w0s = L.map((l) => laneWidth(l, at));
+      const pxPerM = strip.getBoundingClientRect().width / Math.max(1, L.reduce((sum, l) => sum + laneWidth(l, at), 0));
+      const step = project.units === 'ft' ? 0.5 / M2FT : 0.1;
+      let moved = false;
+      checkpoint();
+      strip.classList.add('resizing');
+      onMove = (ev) => {
+        if (Math.abs(ev.clientX - x0) > 2) moved = true;
+        if (!moved) return;
+        let delta = Math.round((wa0 + (ev.clientX - x0) / pxPerM) / step) * step - wa0;
+        // which lanes change, and by how many times delta (mirror mode also moves the other side)
+        const coef = new Map(), add = (k, c) => coef.set(k, (coef.get(k) || 0) + c);
+        const am = partner(el, i), bm = mirroring(el) ? L.length - 2 - i : null;
+        add(i, 1);
+        if (am !== null) add(am, 1);
+        if (!ev.shiftKey) {
+          if (i + 1 !== am) add(i + 1, -1);
+          if (bm !== null && bm !== i) add(bm, -1);
+        }
+        // no lane narrower than zero
+        for (const [k, c] of coef) {
+          const w0 = w0s[k];
+          if (c > 0) delta = Math.max(delta, -w0 / c); else if (c < 0) delta = Math.min(delta, w0 / -c);
+        }
+        for (const [k, c] of coef) setLaneWidth(el, L[k], w0s[k] + c * delta);
+        ui.lastLanes = structuredClone(L);
+        updateLaneStrip(el);
+      };
+      onUp = () => {
+        strip.classList.remove('resizing');
+        if (!moved) undoStack.pop();
+        refresh();
+      };
+    } else {
+      // reorder by dragging, or pick the lane with a click
+      const blocks = [...strip.querySelectorAll('.lb')];
+      const rects = blocks.map((bk) => bk.getBoundingClientRect());
+      const sRect = strip.getBoundingClientRect();
+      const mark = document.createElement('div');
+      mark.className = 'lanemark';
+      let dragging = false, target = i;
+      onMove = (ev) => {
+        const dx = ev.clientX - x0;
+        if (!dragging && Math.abs(dx) < 5) return;
+        if (!dragging) { dragging = true; block.classList.add('dragging'); strip.appendChild(mark); }
+        block.style.transform = `translateX(${dx}px)`;
+        const others = rects.filter((_, k) => k !== i);
+        target = others.filter((r) => r.left + r.width / 2 < ev.clientX).length;
+        const edge = target < others.length ? others[target].left : others[others.length - 1].right;
+        mark.style.left = `${edge - sRect.left - 2}px`;
+      };
+      onUp = () => {
+        if (!dragging) { selectLane(el, laneSelIn(el) === i ? null : i, true); return; }
+        mark.remove();
+        if (target === i) { block.style.transform = ''; block.classList.remove('dragging'); return; }
+        editLanes(el, (Ls) => { const [lane] = Ls.splice(i, 1); Ls.splice(target, 0, lane); return target; });
+      };
+    }
+    const up = () => {
+      strip.removeEventListener('pointermove', onMove);
+      strip.removeEventListener('pointerup', up);
+      strip.removeEventListener('pointercancel', up);
+      onUp();
+    };
+    strip.addEventListener('pointermove', onMove);
+    strip.addEventListener('pointerup', up);
+    strip.addEventListener('pointercancel', up);
+  });
+  strip.addEventListener('pointerover', (e) => {
+    const block = e.target.closest('.lb');
+    const i = block ? +block.dataset.i : null;
+    if (i !== ui.laneHover) { ui.laneHover = i; render(); }
+  });
+  strip.addEventListener('pointerleave', () => { ui.laneHover = null; render(); });
+  strip.addEventListener('keydown', (e) => {
+    const block = e.target.closest('.lb');
+    if (!block) return;
+    const i = +block.dataset.i, L = el.p.lanes;
+    const handled = () => { e.preventDefault(); e.stopPropagation(); };
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      handled();
+      const j = clamp(i + (e.key === 'ArrowLeft' ? -1 : 1), 0, L.length - 1);
+      if (e.altKey) { if (j !== i) editLanes(el, (Ls) => { [Ls[i], Ls[j]] = [Ls[j], Ls[i]]; return j; }, { focusLane: true }); } else selectLane(el, j, true);
+    } else if (e.key === 'Delete' || e.key === 'Backspace') {
+      handled();
+      editLanes(el, (Ls) => { Ls.splice(i, 1); return Ls.length ? Math.min(i, Ls.length - 1) : null; }, { focusLane: true });
+    } else if (e.key === 'Escape' && laneSelIn(el) !== null) {
+      handled();
+      selectLane(el, null);
+    }
+  });
+
+  props.querySelectorAll('[data-laneend]').forEach((b) => b.addEventListener('click', () => {
+    ui.laneEnd = +b.dataset.laneend;
+    renderProps();
+  }));
+  props.querySelector('[data-taper]').addEventListener('change', (e) => {
+    if (e.target.checked) {
+      ui.taperEdit = el.id;
+      ui.laneEnd = 1;
+      renderProps();
+      toast('Now showing the end of the road. Widths you change here taper from the start.');
+    } else {
+      ui.taperEdit = null;
+      ui.laneEnd = 0;
+      editLanes(el, (L) => { L.forEach((l) => { l.w2 = null; }); });
+    }
+  });
+  props.querySelector('[data-mirror]').addEventListener('click', () => {
+    ui.mirror = !ui.mirror;
+    renderProps();
+  });
+  props.querySelector('[data-lanecopy]').addEventListener('click', () => {
+    ui.laneClip = structuredClone(el.p.lanes);
+    renderProps();
+    toast('Lanes copied. Select another road and press Paste.');
+  });
+  props.querySelector('[data-lanepaste]').addEventListener('click', () => {
+    if (!ui.laneClip) return;
+    editLanes(el, () => { el.p.lanes = structuredClone(ui.laneClip); return null; });
+    toast('Lanes pasted.', { undoable: true });
+  });
+  props.querySelector('[data-addlane]').addEventListener('change', (e) => {
+    const type = e.target.value;
+    if (!type) return;
+    const T = LANE_TYPES[type];
+    editLanes(el, (L) => {
+      const sel = laneSelIn(el);
+      const lane = (dir) => ({ type, w: T.def, w2: null, dir: T.dir ? dir : null });
+      const p = sel !== null ? partner(el, sel) : null;
+      if (p !== null) {
+        // add a matching pair, one on each side
+        const [lo, hi] = sel < p ? [sel, p] : [p, sel];
+        L.splice(hi, 0, lane('fwd'));
+        L.splice(lo + 1, 0, lane('back'));
+        return sel < p ? sel + 1 : sel + 2;
+      }
+      const at = sel !== null ? sel + 1 : Math.ceil(L.length / 2);
+      L.splice(at, 0, lane('fwd'));
+      return at;
+    });
+  });
+  props.querySelector('[data-preset]').addEventListener('change', (e) => {
+    if (!e.target.value) return;
+    editLanes(el, () => { el.p.lanes = structuredClone(PRESETS[e.target.value]); return null; });
+  });
 }
 
 function renderCrossSection(el) {
@@ -744,16 +1541,45 @@ function renderCrossSection(el) {
   box.innerHTML = tapers ? one(0, 'Start of road') + one(1, 'End of road') : one(0, '');
 }
 
+// How the lanes at one end of a road compare with the road it continues. Null if it doesn't continue one.
+function jointMismatch(el, end) {
+  const l = el.p.links?.[end];
+  const target = l && getEl(l.id);
+  if (target?.type !== 'segment' || l.key === 'side') return null;
+  const theirs = lanesAtJoint(target, l.key, end);
+  const t = end === 'start' ? 0 : 1;
+  const { ws } = laneLayout(el.p.lanes, t);
+  const ok = theirs.length === ws.length && theirs.every((x, i) => x.type === el.p.lanes[i].type && Math.abs(x.w - ws[i]) < 0.03);
+  return ok ? null : { mine: roadWidth(el.p.lanes, t), theirs: roadWidth(theirs, 0), sameTypes: theirs.length === ws.length && theirs.every((x, i) => x.type === el.p.lanes[i].type) };
+}
+
 function linksHtml(el) {
   if (el.type !== 'segment') return '';
-  const parts = ['start', 'end'].map((end) => {
+  const label = (o) => esc(nameOf(o));
+  const rows = ['start', 'end'].map((end) => {
     const l = el.p.links?.[end];
     const target = l && getEl(l.id);
     if (!target) return '';
-    const where = l.key.startsWith('leg') ? `${TYPES[target.type].label}, leg ${+l.key.slice(3) + 1}` : TYPES[target.type].label;
-    return `<div class="linkrow">${end === 'start' ? 'Start' : 'End'} connected to ${esc(where)} <button data-unlink="${end}">Disconnect</button></div>`;
+    const what = l.key.startsWith('leg') ? `${TYPES[target.type].label.toLowerCase()} leg ${+l.key.slice(3) + 1}`
+      : l.key === 'side' ? `the side of ${label(target)}`
+        : TYPES[target.type].lanes ? `${label(target)} (its ${l.key})` : TYPES[target.type].label.toLowerCase();
+    const End = end === 'start' ? 'Start' : 'End';
+    const bad = jointMismatch(el, end);
+    const fix = bad ? `<div class="linkfix" data-hl="${target.id}">
+        <span>⚠ The ${end} of this road is ${fmt(bad.mine)} curb to curb, but the road it continues is ${fmt(bad.theirs)}${bad.sameTypes ? '' : ' and has different lanes'}. The ${end} is marked on the map.</span>
+        <button data-match="${end}" title="Change the lanes at this end to match the other road">Match lanes</button></div>` : '';
+    return `<div class="linkrow" data-hl="${target.id}"><span><strong>${End}</strong> meets ${what}</span>
+      <span class="linkbtns"><button data-show="${target.id}" title="Select that road">Show</button><button data-unlink="${end}">Disconnect</button></span></div>${fix}`;
   }).join('');
-  return parts ? `<h3>Connections</h3>${parts}` : '';
+  // roads that attach to this one
+  const joined = els().filter((o) => o.type === 'segment' && o.id !== el.id && ['start', 'end'].some((e) => o.p.links?.[e]?.id === el.id));
+  const joinedRows = joined.map((o) => {
+    const e = ['start', 'end'].find((x) => o.p.links?.[x]?.id === el.id);
+    const how = o.p.links[e].key === 'side' ? 'joins its side' : `continues from its ${o.p.links[e].key}`;
+    return `<div class="linkrow" data-hl="${o.id}"><span>${label(o)} ${how}</span><span class="linkbtns"><button data-show="${o.id}" title="Select that road">Show</button></span></div>`;
+  }).join('');
+  if (!rows && !joinedRows) return '';
+  return `<h3>Connections</h3>${rows}${joinedRows ? `<div class="muted small linksub">Roads attached to this one</div>${joinedRows}` : ''}`;
 }
 
 function warningsOf(el) {
@@ -795,6 +1621,7 @@ function renderProps() {
   const t = TYPES[el.type];
   const help = t.help ?? (t.kind === 'point' ? t.hint : '');
   let h = `<div class="props-head"><h2>${t.label}</h2>
+      ${el.type === 'segment' ? `<button data-act="split" title="Split road (X): cut it into pieces with their own lanes" aria-label="Split road">${ACT_ICONS.split}</button>` : ''}
       <button data-act="dup" title="Duplicate (Ctrl+D)" aria-label="Duplicate">${ACT_ICONS.dup}</button>
       <button data-act="front" title="Bring to front" aria-label="Bring to front">${ACT_ICONS.front}</button>
       <button data-act="back" title="Send to back" aria-label="Send to back">${ACT_ICONS.back}</button>
@@ -805,9 +1632,14 @@ function renderProps() {
       <input type="range" data-k="rot" min="0" max="359" step="1" value="${Math.round(el.rot)}">
       <input type="number" data-k="rot" min="0" max="359" step="1" value="${Math.round(el.rot)}"></span></label>`;
   }
+  if (t.lanes) {
+    h += `${lanesHtml(el)}<h3>Shape</h3>
+      <div class="row"><button data-smoothroad title="Even out wobbles and use fewer points. Press again to smooth more.">Smooth curve</button></div>
+      <p class="muted small">${el.pts.length} points. Hold Ctrl (⌘ on Mac) and drag the road to add a bend; Alt+click a point to remove it.</p>
+      <h3>Options</h3>`;
+  }
   h += t.params.filter((d) => !d.when || d.when(el.p)).map((d) => paramHtml(d, el.p[d.k])).join('');
   if (t.legs) h += legsHtml(el);
-  if (t.lanes) h += lanesHtml(el);
   h += linksHtml(el);
   h += `<div id="warns">${warningsHtml(el)}</div>`;
   h += '<div class="row"><button data-act="deselect">Done</button></div>';
@@ -880,57 +1712,7 @@ function wireProps(el) {
     refresh();
   }));
 
-  // road lanes
-  const preset = props.querySelector('[data-preset]');
-  if (preset) {
-    preset.addEventListener('change', () => {
-      if (!preset.value) return;
-      checkpoint();
-      el.p.lanes = structuredClone(PRESETS[preset.value]);
-      ui.lastLanes = structuredClone(el.p.lanes);
-      refresh();
-    });
-  }
-  props.querySelectorAll('.lanerow').forEach((row) => {
-    const i = +row.dataset.lane, lane = el.p.lanes[i];
-    row.querySelectorAll('[data-lf]').forEach((input) => {
-      const f = input.dataset.lf;
-      input.addEventListener(input.tagName === 'SELECT' ? 'change' : 'input', () => {
-        if (f === 'type') {
-          const T = LANE_TYPES[input.value];
-          Object.assign(lane, { type: input.value, w: T.def, w2: null, dir: T.dir ? lane.dir || 'fwd' : null });
-          ui.lastLanes = structuredClone(el.p.lanes);
-          refresh();
-          return;
-        }
-        if (f === 'w2' && input.value.trim() === '') lane.w2 = null;
-        else {
-          const v = parseFloat(input.value);
-          if (Number.isNaN(v)) return;
-          lane[f] = clamp(fromDisp(v), 0, 30);
-        }
-        ui.lastLanes = structuredClone(el.p.lanes);
-        liveUpdate(el);
-      });
-    });
-    row.querySelectorAll('[data-lact]').forEach((b) => b.addEventListener('click', () => {
-      checkpoint();
-      const a = b.dataset.lact, L = el.p.lanes;
-      if (a === 'dir') lane.dir = lane.dir === 'back' ? 'fwd' : 'back';
-      if (a === 'del') L.splice(i, 1);
-      if (a === 'up' && i > 0) [L[i - 1], L[i]] = [L[i], L[i - 1]];
-      if (a === 'down' && i < L.length - 1) [L[i + 1], L[i]] = [L[i], L[i + 1]];
-      ui.lastLanes = structuredClone(L);
-      refresh();
-    }));
-  });
-  const add = props.querySelector('[data-addlane]');
-  if (add) add.onclick = () => {
-    checkpoint();
-    const L = el.p.lanes;
-    L.splice(Math.ceil(L.length / 2), 0, { type: 'travel', w: LANE_TYPES.travel.def, w2: null, dir: 'fwd' });
-    refresh();
-  };
+  if (t.lanes) wireLanes(el);
   const flip = props.querySelector('[data-flip]');
   if (flip) flip.onclick = () => {
     checkpoint();
@@ -943,12 +1725,46 @@ function wireProps(el) {
       ...l, w: l.w2 ?? l.w, w2: l.w2 === null ? null : l.w, dir: l.dir === 'fwd' ? 'back' : l.dir === 'back' ? 'fwd' : l.dir,
     }));
     const xs = el.p.xwStart; el.p.xwStart = el.p.xwEnd; el.p.xwEnd = xs;
+    // roads attached to this one's side stay put
+    for (const o of els()) {
+      for (const end of ['start', 'end']) {
+        const l = o.p.links?.[end];
+        if (l?.id === el.id && l.key === 'side') o.p.links[end] = { ...l, s: 1 - l.s, side: -l.side };
+      }
+    }
     refresh();
   };
   props.querySelectorAll('[data-xsdl]').forEach((b) => b.addEventListener('click', () => {
     const t0 = +b.dataset.xsdl;
     const { svg } = crossSectionSvg(el.p.lanes, t0, fmt, { pxPerM: 30, title: t0 ? 'End of road' : 'Start of road' });
     download(svg, `cross-section-${t0 ? 'end' : 'start'}.svg`, 'image/svg+xml');
+  }));
+  const smoothBtn = props.querySelector('[data-smoothroad]');
+  if (smoothBtn) smoothBtn.onclick = () => smoothRoad(el);
+  props.querySelectorAll('[data-show]').forEach((b) => b.addEventListener('click', () => {
+    ui.selectedId = b.dataset.show;
+    ui.hoverId = null;
+    render();
+    renderProps();
+  }));
+  props.querySelectorAll('[data-hl]').forEach((row) => {
+    row.addEventListener('pointerenter', () => { ui.hoverId = row.dataset.hl; render(); });
+    row.addEventListener('pointerleave', () => { ui.hoverId = null; render(); });
+  });
+  props.querySelectorAll('[data-match]').forEach((b) => b.addEventListener('click', () => {
+    const end = b.dataset.match, l = el.p.links[end];
+    const theirs = lanesAtJoint(getEl(l.id), l.key, end);
+    checkpoint();
+    const L = el.p.lanes;
+    if (theirs.length === L.length && theirs.every((x, i) => x.type === L[i].type)) {
+      // same lanes, different widths: change this end only, so the far end still lines up
+      L.forEach((lane, i) => {
+        if (end === 'start') { lane.w2 = lane.w2 ?? lane.w; lane.w = theirs[i].w; } else lane.w2 = theirs[i].w;
+        if (lane.w2 !== null && Math.abs(lane.w2 - lane.w) < 0.005) lane.w2 = null;
+      });
+    } else el.p.lanes = theirs;
+    refresh();
+    toast('Lanes now match the connected road.', { undoable: true });
   }));
   props.querySelectorAll('[data-unlink]').forEach((b) => b.addEventListener('click', () => {
     checkpoint();
@@ -958,6 +1774,7 @@ function wireProps(el) {
 
   props.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', () => {
     const a = b.dataset.act;
+    if (a === 'split') setSplitting(true);
     if (a === 'dup') duplicate();
     if (a === 'del') removeSelected();
     if (a === 'deselect') { ui.selectedId = null; render(); renderProps(); }
@@ -1286,7 +2103,7 @@ function wireFiles() {
       renderVariants(); renderImagery(); refresh();
       toast(`Opened ${file.name}`);
     } catch {
-      toast("That file isn't a Road Drafter project.");
+      toast("That file isn't a Left Of Way project.");
     }
   });
 }
@@ -1296,7 +2113,7 @@ function wireFiles() {
 const ANNOTATIONS = new Set(['note', 'dimension', 'vehicle']);
 const fileStem = () => {
   const name = project.variants[project.current].name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  return `road-draft-${name || 'option'}-${new Date().toLocaleDateString('en-CA')}`;
+  return `left-of-way-${name || 'option'}-${new Date().toLocaleDateString('en-CA')}`;
 };
 function scaleBar(W, H) {
   const lat = map.getCenter().lat;
@@ -1372,10 +2189,15 @@ async function runExport(action) {
 }
 
 // ---------- keyboard ----------
+// Bend-point handles only show while Ctrl (⌘) is held, so dragging a line doesn't add points by accident.
+const setCtrl = (on) => { if (ui.ctrlHeld !== on) { ui.ctrlHeld = on; if (getEl(ui.selectedId)?.pts) render(); } };
+document.addEventListener('keydown', (e) => { if (e.key === 'Control' || e.key === 'Meta') setCtrl(true); });
+document.addEventListener('keyup', (e) => { if (e.key === 'Control' || e.key === 'Meta') setCtrl(false); });
+window.addEventListener('blur', () => setCtrl(false));
 // With something selected, arrow keys nudge it instead of panning the map (Leaflet listens on the map itself).
 document.addEventListener('keydown', (e) => {
   if (!e.key.startsWith('Arrow') || !getEl(ui.selectedId) || e.ctrlKey || e.metaKey) return;
-  if (e.target.matches('input:not([type=checkbox]), select, textarea')) return;
+  if (e.target.matches('input:not([type=checkbox]), select, textarea') || e.target.closest?.('.lanestrip')) return;
   e.stopPropagation();
   e.preventDefault();
   nudge(e);
@@ -1403,11 +2225,23 @@ document.addEventListener('keydown', (e) => {
   if (mod && k === 'd') { e.preventDefault(); duplicate(); return; }
   if (mod && k === 's') { e.preventDefault(); $('saveFile').click(); return; }
   if (mod) return;
+  if (ui.extend) {
+    if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); finishExtend(); return; }
+    if (e.key === 'Backspace' && ui.extend.added) {
+      const el = getEl(ui.extend.id);
+      if (ui.extend.end === 'end') el.pts.pop(); else el.pts.shift();
+      ui.extend.added--;
+      render();
+      return;
+    }
+  }
   if (ui.draft) {
     if (e.key === 'Enter') { e.preventDefault(); finishDraft(); return; }
     if (e.key === 'Escape') { ui.draft = null; render(); return; }
     if (e.key === 'Backspace') { ui.draft.pts.pop(); if (!ui.draft.pts.length) ui.draft = null; render(); return; }
   }
+  if (e.key === 'Escape' && ui.splitting) { setSplitting(false); return; }
+  if (k === 'x') { setSplitting(!ui.splitting); return; }
   if (e.key === 'Escape') {
     if (ui.tool === 'select' && !ui.calibrate && !ui.adjustBackdrop && ui.selectedId) {
       ui.selectedId = null; render(); renderProps(); return;

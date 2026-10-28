@@ -12,8 +12,59 @@ export const SOURCES = {
   custom: { label: 'Custom tile server', attribution: 'Imagery: custom source' },
 };
 
+// ---------- tile memory ----------
+// Leaflet drops tiles soon after they leave the screen, and the USGS ImageServer renders every
+// request fresh, so panning back used to download them again. Loaded tile images are kept here
+// and reused. Tiles near the design get a bigger budget so the work area stays loaded.
+const KEEP_RADIUS = 300; // meters around anything drawn
+const MAX_NEAR = 800, MAX_FAR = 300; // tiles kept near / away from the design
+const tileCache = new Map(); // url -> { img, center, reach }; oldest first
+let keepNear = () => [];
+
+function rememberTile(url, img, bounds) {
+  tileCache.delete(url);
+  tileCache.set(url, { img, center: bounds.getCenter(), reach: bounds.getNorthWest().distanceTo(bounds.getSouthEast()) / 2 });
+  if (tileCache.size > MAX_NEAR + MAX_FAR + 50) trimTiles(); // trim in batches, not on every tile
+}
+
+function trimTiles() {
+  const pts = keepNear().map((p) => L.latLng(p[0], p[1]));
+  const near = [], far = [];
+  for (const [url, t] of tileCache) {
+    if (t.img.parentNode) continue; // on screen right now
+    (pts.some((p) => t.center.distanceTo(p) < KEEP_RADIUS + t.reach) ? near : far).push(url);
+  }
+  near.slice(0, Math.max(0, near.length - MAX_NEAR)).forEach((u) => tileCache.delete(u));
+  far.slice(0, Math.max(0, far.length - MAX_FAR)).forEach((u) => tileCache.delete(u));
+}
+
+// A tile layer that reuses images it has already loaded.
+const CachedTileLayer = L.TileLayer.extend({
+  createTile(coords, done) {
+    const url = this.getTileUrl(coords);
+    const hit = tileCache.get(url);
+    if (hit && !hit.img.parentNode) {
+      tileCache.delete(url);
+      tileCache.set(url, hit);
+      Promise.resolve().then(() => done(null, hit.img));
+      return hit.img;
+    }
+    const img = L.TileLayer.prototype.createTile.call(this, coords, done);
+    const bounds = this._tileCoordsToBounds(coords);
+    img.addEventListener('load', () => rememberTile(url, img, bounds), { once: true });
+    return img;
+  },
+  // Leaflet blanks a removed tile's src to cancel its download. Only do that for tiles still
+  // downloading, so loaded ones can be reused.
+  _removeTile(key) {
+    const el = this._tiles[key]?.el;
+    const base = el?.complete && el.naturalWidth ? L.GridLayer : L.TileLayer;
+    return base.prototype._removeTile.call(this, key);
+  },
+});
+
 // Tiles rendered on demand from a USGS ImageServer.
-const ImageServerLayer = L.TileLayer.extend({
+const ImageServerLayer = CachedTileLayer.extend({
   getTileUrl(c) {
     const size = (2 * HALF_WORLD) / 2 ** c.z;
     const minX = -HALF_WORLD + c.x * size, maxY = HALF_WORLD - c.y * size;
@@ -22,7 +73,9 @@ const ImageServerLayer = L.TileLayer.extend({
   },
 });
 
-export function createImagery(map, onStatus = () => {}) {
+/** keepNearFn returns [lat, lng] points of the design; tiles around them stay loaded longest. */
+export function createImagery(map, onStatus = () => {}, keepNearFn = null) {
+  if (keepNearFn) keepNear = keepNearFn;
   let layers = [];
   let cfg = null;
 
@@ -58,10 +111,10 @@ export function createImagery(map, onStatus = () => {}) {
     if (src.service || !tpl) {
       // USGS (also the fallback when a key or URL is missing)
       const service = src.service || 'USGSNAIPImagery';
-      layers.push(L.tileLayer(USGS_CACHED, { maxZoom: 15, attribution: SOURCES.naip.attribution }));
+      layers.push(new CachedTileLayer(USGS_CACHED, { maxZoom: 15, attribution: SOURCES.naip.attribution }));
       layers.push(new ImageServerLayer('', { service, minZoom: 16, maxNativeZoom: 19, maxZoom: 22, attribution: src.attribution }));
     } else {
-      layers.push(L.tileLayer(tpl, { maxNativeZoom: nativeMax(), maxZoom: 22, attribution: src.attribution, crossOrigin: 'anonymous' }));
+      layers.push(new CachedTileLayer(tpl, { maxNativeZoom: nativeMax(), maxZoom: 22, attribution: src.attribution, crossOrigin: 'anonymous' }));
     }
     layers.forEach((l) => { watch(l); l.addTo(map); });
     return src.service || tpl ? null : 'Add a key or tile URL to use this source. Showing USGS for now.';

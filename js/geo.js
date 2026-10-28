@@ -52,10 +52,12 @@ export function samplePath(pts, { smooth = true, closed = false, step = 4, start
     if (closed) {
       ctrl = [P[P.length - 1], ...P, P[0], P[1]];
     } else {
+      // Catmull-Rom's tangent at a point is half the gap between its neighbors, so a forced
+      // direction needs a phantom neighbor placed to make that tangent exactly startDir / endDir.
       const d0 = dist(P[0], P[1]), dn = dist(P[P.length - 2], P[P.length - 1]);
-      const first = startDir ? [P[0][0] - startDir[0] * d0, P[0][1] - startDir[1] * d0] : [2 * P[0][0] - P[1][0], 2 * P[0][1] - P[1][1]];
+      const first = startDir ? [P[1][0] - 2 * startDir[0] * d0, P[1][1] - 2 * startDir[1] * d0] : [2 * P[0][0] - P[1][0], 2 * P[0][1] - P[1][1]];
       const L = P.length - 1;
-      const last = endDir ? [P[L][0] + endDir[0] * dn, P[L][1] + endDir[1] * dn] : [2 * P[L][0] - P[L - 1][0], 2 * P[L][1] - P[L - 1][1]];
+      const last = endDir ? [P[L - 1][0] + 2 * endDir[0] * dn, P[L - 1][1] + 2 * endDir[1] * dn] : [2 * P[L][0] - P[L - 1][0], 2 * P[L][1] - P[L - 1][1]];
       ctrl = [first, ...P, last];
     }
     for (let i = 1; i < ctrl.length - 2; i++) {
@@ -111,6 +113,19 @@ export function offsetPts(samples, norms, offsets) {
     const o = typeof offsets === 'number' ? offsets : offsets[i];
     return [p.x + norms[i][0] * o, p.y + norms[i][1] * o];
   });
+}
+
+/** The closest spot on a sampled path to p: distance along it (s) and how far away it is (d). */
+export function nearestOnSamples(samples, p) {
+  let best = { s: 0, d: Infinity };
+  for (let i = 0; i < samples.length - 1; i++) {
+    const a = samples[i], b = samples[i + 1];
+    const dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((p[0] - a.x) * dx + (p[1] - a.y) * dy) / L2));
+    const d = Math.hypot(p[0] - (a.x + dx * t), p[1] - (a.y + dy * t));
+    if (d < best.d) best = { s: a.s + (b.s - a.s) * t, d };
+  }
+  return best;
 }
 
 /** Position and direction at distance s along the samples. */

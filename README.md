@@ -1,4 +1,4 @@
-# Road Drafter
+# Left Of Way
 
 Sketch street redesigns (roundabouts, lane changes, bike lanes, traffic calming) on aerial imagery,
 then export to Figma as an SVG with one named layer per element.
@@ -30,13 +30,39 @@ busy, so they can be slow or fail. Pasting a Google Maps link is the most reliab
 | Analysis | Note, measure, turning check (fire truck, bus, delivery truck, car) |
 
 - **Connecting roads:** with the Road segment tool, start or end on an orange dot (a roundabout leg,
-  a raised intersection side, or another road's end). Connected pieces stay attached when you move
-  them, and roundabout legs take the road's width.
+  a raised intersection side, or another road's end). A road started from another road's end takes its
+  lanes, so the two line up. If connected roads don't line up, the Connections section offers
+  **Match lanes**. Connected pieces stay attached when you move them.
+- **T-intersections:** end a road on the side of another road. It snaps to that road's curb and keeps
+  its own angle. It's trimmed along the curb, and both corners get curb returns that fit the angle (set
+  the corner radius in its options).
+- **Connections panel:** lists what each end of the road meets and which roads attach to it. Hover a
+  row to outline that road on the map, or press Show to select it. If an end doesn't line up with the
+  road it continues, a ⚠ marks that end on the map and the panel offers **Match lanes**.
+- **Extending:** select a road and use the **+** past either end. Click it to keep drawing from that
+  end, or drag it to add one point. Hold Ctrl (⌘ on Mac) and the + turns orange: it then starts a
+  **new road** connected to that end, with the same lanes (click to draw it, or drag one out). Hold Shift while drawing to snap to 15° steps. The length of the
+  piece you're drawing shows next to the cursor.
+- **Bends:** hold Ctrl (⌘ on Mac) and drag a road to add a bend point there. Plain drags never add
+  points. Alt+click a point to remove it. **Smooth curve** evens out wobbles and cuts the number of
+  points; press it again to smooth more. Smoothing never moves the ends or changes the road's heading
+  where it connects, and side streets stay attached at the same spot.
 - **Roundabout legs:** drag the orange squares to aim each leg down its street. Each leg has its own
   width and an automatic crosswalk with a refuge in the splitter island.
-- **Lanes:** pick a preset or build your own. Give a lane an end width to taper it, e.g. a turn lane
-  from 10 ft to 0 while a median grows from 0 to 10 ft. Markings (yellow center lines, dashed lane
-  lines, curbs, buffer hatching, flex posts) are drawn automatically.
+- **Lanes:** the lane strip shows the road's cross-section to scale, left to right facing the road's
+  arrow. Click a lane (in the strip, or click it on a selected road) to edit its type, width and
+  direction. Drag a lane to reorder it. Drag the line between two lanes to trade width between them,
+  so the overall width stays the same (Shift changes just one lane). With the strip focused, the arrow
+  keys pick a lane, Alt+arrows move it and Delete removes it. Copy and Paste carry lanes between roads.
+  **Mirror** (on by default when both sides have the same lanes) copies edits across the middle:
+  widen a bike lane and the other one widens too, add a lane and its twin appears on the other side.
+  Turn on **Different widths at each end** to taper lanes, e.g. a turn lane from 10 ft to 0 while a
+  median grows from 0 to 10 ft. Markings (yellow center lines, dashed lane lines, curbs, buffer
+  hatching, flex posts) are drawn automatically.
+- **Splitting roads:** press X (or the scissors button on a selected road) and click a road to cut it
+  into connected pieces, each with its own lanes. For a median opening at an intersection, cut on both
+  sides, then select the middle piece and change its median to a turn lane. On connected roads, changing
+  a lane's type keeps its width so the pieces still line up.
 - **Automatic crosswalks:** roundabout legs, road ends, raised intersections, refuge islands and bumpouts.
 - **Design guide check:** warnings when a dimension falls outside common FHWA / NACTO / MUTCD ranges.
   These are typical ranges, not an engineering review.

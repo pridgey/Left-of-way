@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Left Of Way: a left-turn arrow on asphalt, cutting across the double yellow line -->
+  <defs>
+    <linearGradient id="asphalt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#55585c"/>
+      <stop offset="1" stop-color="#3b3d40"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="url(#asphalt)"/>
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="none" stroke="#ece9e2" stroke-width="2"/>
+  <!-- double yellow centerline -->
+  <path d="M9.6 2.5V29.5M12.6 2.5V29.5" stroke="#f0c330" stroke-width="1.7"/>
+  <!-- left-turn arrow -->
+  <path d="M22 28V17.5Q22 12 16.5 12H13.5" fill="none" stroke="#fff" stroke-width="3.6" stroke-linejoin="round"/>
+  <path d="M4.5 12L14 5.5V18.5Z" fill="#fff" stroke="#fff" stroke-width="1" stroke-linejoin="round"/>
+</svg>
